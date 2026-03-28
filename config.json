@@ -1,0 +1,55 @@
+﻿{
+    "general":  {
+                    "start_with_windows":  false,
+                    "minimize_to_tray":  true,
+                    "language":  "ko",
+                    "theme":  "dark",
+                    "sound_effects":  true,
+                    "capture_notification":  true
+                },
+    "capture":  {
+                    "default_action":  "copy",
+                    "show_cursor":  false,
+                    "include_shadow":  true,
+                    "auto_save":  true,
+                    "save_directory":  "~/Pictures/SuperCapture/",
+                    "filename_pattern":  "SC_{date}_{time}_{index}",
+                    "image_format":  "png",
+                    "jpg_quality":  95,
+                    "region_border_color":  "#00AAFF",
+                    "magnifier_zoom":  4,
+                    "smart_edge_snap":  true,
+                    "multi_monitor":  "all",
+                    "copy_path_with_image":  true
+                },
+    "ocr":  {
+                "api_key":  "",
+                "api_key_encrypted":  false,
+                "model":  "gpt-4o",
+                "auto_language_detect":  true,
+                "default_language":  "ko",
+                "preserve_formatting":  true,
+                "auto_copy_result":  true
+            },
+    "clipboard":  {
+                      "max_history":  50,
+                      "auto_clear_hours":  24,
+                      "save_ocr_text":  true
+                  },
+    "hotkeys":  {
+                    "region_capture":  "ctrl+shift+c",
+                    "repeat_capture":  "ctrl+shift+r",
+                    "clipboard_history":  "ctrl+alt+v",
+                    "region_capture_suppress":  false,
+                    "repeat_capture_suppress":  false,
+                    "trigger_on_release":  true,
+                    "debounce_ms":  280
+                },
+    "editor":  {
+                   "default_pen_color":  "#FF0000",
+                   "default_pen_width":  3,
+                   "default_highlight_color":  "#FFFF00",
+                   "auto_number_start":  1,
+                   "mosaic_pixel_size":  10
+               }
+}

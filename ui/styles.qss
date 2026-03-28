@@ -1,0 +1,63 @@
+﻿QWidget {
+    background-color: #171a21;
+    color: #e5e7eb;
+    font-family: "Segoe UI";
+    font-size: 10pt;
+}
+
+QMenu {
+    background-color: #1f2430;
+    border: 1px solid #2f3747;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 20px 6px 14px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #2d3a4d;
+}
+
+QPushButton {
+    background-color: #2a3445;
+    color: #e5e7eb;
+    border: 1px solid #3c4a62;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+
+QPushButton:hover {
+    background-color: #33445d;
+}
+
+QPushButton:pressed {
+    background-color: #213044;
+}
+
+QTextEdit {
+    background-color: #10141c;
+    border: 1px solid #303748;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+QLabel#dialogTitle {
+    font-size: 12pt;
+    font-weight: 600;
+}
+
+QLabel#dialogInfo {
+    color: #7dd3fc;
+}
+
+QWidget#captureToolbar {
+    background-color: rgba(12, 16, 24, 235);
+    border: 1px solid #2d3950;
+    border-radius: 8px;
+}
+
+QPushButton#toolbarButton {
+    min-width: 72px;
+}

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+.venv-build/
+venv/
+
+# PyInstaller
+*.manifest
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Secrets / user config
+.supercapture/
+fernet.key
+
+# Release artifacts
+release/
+
+# Temp files
+_run_*.log
+_fix_*.py
+_test_*.py
+tmp_*.png
+/*.png
+.playwright-mcp/

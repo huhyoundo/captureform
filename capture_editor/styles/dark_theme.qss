@@ -1,0 +1,110 @@
+/* 메인 윈도우 */
+QMainWindow {
+    background-color: #1a1a2e;
+}
+
+/* 도구 패널 (좌측) */
+#ToolPanel {
+    background-color: rgba(22, 33, 62, 0.85);
+    border-right: 1px solid rgba(233, 69, 96, 0.3);
+    border-radius: 0px;
+    padding: 8px;
+}
+
+/* 도구 버튼 */
+QPushButton.tool-btn,
+QPushButton[class="tool-btn"] {
+    background-color: transparent;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 10px;
+    color: #a0a0b8;
+    font-size: 13px;
+    font-family: 'Pretendard', sans-serif;
+    font-weight: bold;
+}
+QPushButton.tool-btn:hover,
+QPushButton[class="tool-btn"]:hover {
+    background-color: rgba(233, 69, 96, 0.15);
+    border-color: rgba(233, 69, 96, 0.4);
+    color: #ffffff;
+}
+QPushButton.tool-btn:checked,
+QPushButton[class="tool-btn"]:checked {
+    background-color: rgba(233, 69, 96, 0.25);
+    border-color: #e94560;
+    color: #ffffff;
+}
+
+/* 속성 패널 (우측) */
+#PropertyPanel {
+    background-color: rgba(22, 33, 62, 0.9);
+    border-left: 1px solid rgba(15, 52, 96, 0.5);
+    padding: 12px;
+}
+
+QLabel {
+    color: #E0E0E8;
+    font-weight: bold;
+    font-family: 'Pretendard', sans-serif;
+}
+
+/* 슬라이더 */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #2a2a4a;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    width: 16px;
+    height: 16px;
+    margin: -6px 0;
+    background: #e94560;
+    border-radius: 8px;
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #e94560, stop:1 #ff6b6b);
+    border-radius: 2px;
+}
+
+/* 드롭다운 (폰트 선택 등) */
+QComboBox {
+    background-color: #16213e;
+    border: 1px solid rgba(233, 69, 96, 0.3);
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #e0e0e8;
+    font-size: 13px;
+    font-family: 'Pretendard', sans-serif;
+}
+QComboBox:hover {
+    border-color: #e94560;
+}
+QComboBox::drop-down {
+    border: none;
+    padding-right: 8px;
+}
+QComboBox QAbstractItemView {
+    background-color: #16213e;
+    border: 1px solid #e94560;
+    border-radius: 8px;
+    selection-background-color: rgba(233, 69, 96, 0.3);
+    color: #e0e0e8;
+}
+
+/* 컬러 버튼 */
+QPushButton.color-swatch {
+    border: 2px solid rgba(255,255,255,0.2);
+    border-radius: 14px;
+    min-width: 28px;
+    min-height: 28px;
+}
+QPushButton.color-swatch:hover {
+    border-color: #ffffff;
+}
+
+/* 캔버스 (중앙) */
+QGraphicsView {
+    border: none;
+    background: transparent;
+}
