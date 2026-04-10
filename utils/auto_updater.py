@@ -26,8 +26,8 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 CURRENT_VERSION = "1.0.0"
 
 # GitHub repository to query.  Change owner/repo before shipping.
-_GITHUB_OWNER = "compl-software"
-_GITHUB_REPO  = "callcap"
+_GITHUB_OWNER = "huhyoundo"
+_GITHUB_REPO  = "captureform"
 _API_URL       = f"https://api.github.com/repos/{_GITHUB_OWNER}/{_GITHUB_REPO}/releases/latest"
 
 # Request timeout (seconds) for all outbound HTTP calls.
