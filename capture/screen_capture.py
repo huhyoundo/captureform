@@ -14,10 +14,26 @@ class ScreenCaptureService:
         # Qt selector/geometry coordinates are device-independent.
         # Capturing with Qt first helps prevent DPI-related offset issues.
         image = self._capture_region_qt(capture_rect)
-        if image is not None and not image.isNull():
+        if image is not None and not image.isNull() and not self._is_blank(image):
             return image
 
         return self._capture_region_mss(capture_rect)
+
+    @staticmethod
+    def _is_blank(image: QImage) -> bool:
+        """Return True if the image is essentially blank (all white/transparent)."""
+        w, h = image.width(), image.height()
+        if w == 0 or h == 0:
+            return True
+        # Sample a grid of pixels — fast enough and catches blank captures.
+        step_x = max(1, w // 8)
+        step_y = max(1, h // 8)
+        first = image.pixel(0, 0)
+        for y in range(0, h, step_y):
+            for x in range(0, w, step_x):
+                if image.pixel(x, y) != first:
+                    return False
+        return True
 
     def _capture_region_qt(self, rect: QRect) -> QImage | None:
         screens = QGuiApplication.screens()

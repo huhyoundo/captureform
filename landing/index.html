@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Callcap - Smart Screen Capture by COMPL</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --teal: #5BA4A4;
+  --teal-light: #7EC8C8;
+  --teal-dark: #3D8888;
+  --bg-dark: #0B0F1A;
+  --bg-card: #111827;
+  --bg-card-hover: #1A2332;
+  --text: #E8ECF1;
+  --text-dim: #8B95A5;
+  --accent-glow: rgba(91, 164, 164, 0.25);
+  --radius: 16px;
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-dark);
+  color: var(--text);
+  overflow-x: hidden;
+  line-height: 1.6;
+}
+a { color: var(--teal-light); text-decoration: none; }
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-dark); }
+::-webkit-scrollbar-thumb { background: var(--teal-dark); border-radius: 3px; }
+
+/* ===== Animated Background ===== */
+.bg-grid {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(91,164,164,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(91,164,164,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+.bg-orbs {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+}
+.orb {
+  position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.12;
+  animation: orbFloat 20s ease-in-out infinite;
+}
+.orb-1 { width: 500px; height: 500px; background: var(--teal); top: -10%; left: -5%; animation-delay: 0s; }
+.orb-2 { width: 400px; height: 400px; background: #6C63FF; bottom: 10%; right: -5%; animation-delay: -7s; }
+.orb-3 { width: 300px; height: 300px; background: var(--teal-light); top: 50%; left: 40%; animation-delay: -14s; }
+@keyframes orbFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -40px) scale(1.05); }
+  66% { transform: translate(-20px, 20px) scale(0.95); }
+}
+
+/* ===== Navigation ===== */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 16px 40px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(11, 15, 26, 0.7);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(91, 164, 164, 0.1);
+  transition: all 0.3s ease;
+}
+nav.scrolled { padding: 10px 40px; background: rgba(11, 15, 26, 0.95); }
+.nav-logo {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 20px; font-weight: 700; letter-spacing: -0.5px;
+}
+.nav-logo svg { width: 32px; height: 32px; }
+.nav-links { display: flex; gap: 32px; align-items: center; }
+.nav-links a {
+  color: var(--text-dim); font-size: 14px; font-weight: 500;
+  transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--text); }
+.btn-nav {
+  padding: 8px 20px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  background: var(--teal); color: #fff; border: none; cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-nav:hover { background: var(--teal-light); transform: translateY(-1px); }
+
+/* ===== Sections shared ===== */
+section { position: relative; z-index: 1; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+.section-label {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--teal-light);
+  text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px;
+}
+.section-label::before {
+  content: ''; width: 20px; height: 2px; background: var(--teal);
+}
+.section-title {
+  font-size: clamp(28px, 4vw, 42px); font-weight: 800;
+  line-height: 1.2; margin-bottom: 20px;
+  background: linear-gradient(135deg, var(--text) 0%, var(--teal-light) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.section-desc { font-size: 17px; color: var(--text-dim); max-width: 560px; line-height: 1.7; }
+
+/* ===== Reveal Animation ===== */
+.reveal {
+  opacity: 0; transform: translateY(40px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+.reveal-delay-1 { transition-delay: 0.1s; }
+.reveal-delay-2 { transition-delay: 0.2s; }
+.reveal-delay-3 { transition-delay: 0.3s; }
+.reveal-delay-4 { transition-delay: 0.4s; }
+
+/* ===== Hero ===== */
+.hero {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 120px 24px 80px;
+}
+.hero-content { max-width: 800px; }
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 16px; border-radius: 99px;
+  background: rgba(91, 164, 164, 0.1);
+  border: 1px solid rgba(91, 164, 164, 0.2);
+  font-size: 13px; color: var(--teal-light); font-weight: 500;
+  margin-bottom: 32px;
+}
+.hero-badge .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--teal-light);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.hero h1 {
+  font-size: clamp(48px, 7vw, 80px); font-weight: 900;
+  line-height: 1.05; margin-bottom: 24px; letter-spacing: -2px;
+}
+.hero h1 .gradient {
+  background: linear-gradient(135deg, var(--teal-light) 0%, var(--teal) 50%, #6C63FF 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero p {
+  font-size: 19px; color: var(--text-dim); max-width: 520px;
+  margin: 0 auto 40px; line-height: 1.7;
+}
+.hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 32px; border-radius: 12px;
+  background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+  color: #fff; font-size: 16px; font-weight: 700; border: none; cursor: pointer;
+  transition: all 0.3s; position: relative; overflow: hidden;
+}
+.btn-primary::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+  opacity: 0; transition: opacity 0.3s;
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px var(--accent-glow); }
+.btn-primary:hover::after { opacity: 1; }
+.btn-secondary {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 32px; border-radius: 12px;
+  background: transparent; color: var(--text); font-size: 16px; font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.15); cursor: pointer;
+  transition: all 0.3s;
+}
+.btn-secondary:hover {
+  border-color: var(--teal); background: rgba(91,164,164,0.05);
+  transform: translateY(-2px);
+}
+
+/* ===== Hero Visual — Floating Window Mockup ===== */
+.hero-visual {
+  margin-top: 60px; perspective: 1200px;
+}
+.mockup-window {
+  max-width: 700px; margin: 0 auto; border-radius: 12px; overflow: hidden;
+  background: var(--bg-card); border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 40px 80px rgba(0,0,0,0.5), 0 0 60px var(--accent-glow);
+  transform: rotateX(4deg); transition: transform 0.4s ease;
+}
+.mockup-window:hover { transform: rotateX(0deg) scale(1.02); }
+.mockup-titlebar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.mockup-dot { width: 12px; height: 12px; border-radius: 50%; }
+.mockup-dot.red { background: #FF5F57; }
+.mockup-dot.yellow { background: #FEBC2E; }
+.mockup-dot.green { background: #28C840; }
+.mockup-body { padding: 24px; min-height: 300px; position: relative; }
+.mockup-capture-area {
+  width: 100%; height: 240px; border-radius: 8px;
+  background: linear-gradient(135deg, #1a2940 0%, #0d1929 100%);
+  border: 2px dashed rgba(91,164,164,0.3);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.capture-crosshair {
+  width: 180px; height: 120px;
+  border: 2px solid var(--teal-light);
+  border-radius: 4px; position: relative;
+  animation: captureSelect 4s ease-in-out infinite;
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+@keyframes captureSelect {
+  0%, 100% { width: 180px; height: 120px; opacity: 1; }
+  15% { width: 220px; height: 150px; opacity: 1; }
+  30% { width: 220px; height: 150px; opacity: 1; }
+  45% { width: 220px; height: 150px; opacity: 0; }
+  46% { width: 180px; height: 120px; opacity: 0; }
+  60% { opacity: 1; }
+}
+.capture-crosshair::before, .capture-crosshair::after {
+  content: ''; position: absolute; background: var(--teal-light);
+}
+.capture-crosshair::before { width: 1px; height: 100%; left: 50%; top: 0; opacity: 0.3; }
+.capture-crosshair::after { width: 100%; height: 1px; top: 50%; left: 0; opacity: 0.3; }
+.capture-size-label {
+  position: absolute; bottom: -24px; right: 0;
+  font-size: 11px; color: var(--teal-light);
+  background: rgba(91,164,164,0.15); padding: 2px 8px; border-radius: 4px;
+}
+.mockup-toolbar {
+  display: flex; gap: 8px; margin-top: 16px; justify-content: center;
+}
+.mockup-btn {
+  padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  background: rgba(91,164,164,0.12); color: var(--teal-light);
+  border: 1px solid rgba(91,164,164,0.2);
+}
+.mockup-btn.active { background: var(--teal); color: #fff; border-color: var(--teal); }
+
+/* ===== Stats Bar ===== */
+.stats {
+  padding: 40px 0;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.stats-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+  text-align: center;
+}
+.stat-item h3 {
+  font-size: 36px; font-weight: 800; color: var(--teal-light);
+}
+.stat-item h3 .counter { display: inline-block; }
+.stat-item p { font-size: 14px; color: var(--text-dim); margin-top: 4px; }
+
+/* ===== Features ===== */
+.features { padding: 120px 0; }
+.features-header { text-align: center; margin-bottom: 64px; }
+.features-header .section-desc { margin: 0 auto; }
+.features-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+}
+.feature-card {
+  padding: 32px; border-radius: var(--radius);
+  background: var(--bg-card);
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: default; position: relative; overflow: hidden;
+}
+.feature-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--teal), transparent);
+  opacity: 0; transition: opacity 0.4s;
+}
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(91,164,164,0.2);
+  background: var(--bg-card-hover);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+}
+.feature-card:hover::before { opacity: 1; }
+.feature-icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; margin-bottom: 20px;
+  background: rgba(91,164,164,0.1);
+  border: 1px solid rgba(91,164,164,0.15);
+}
+.feature-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+.feature-card p { font-size: 14px; color: var(--text-dim); line-height: 1.6; }
+.feature-card .shortcut {
+  display: inline-block; margin-top: 14px;
+  padding: 4px 10px; border-radius: 6px;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  font-size: 12px; font-weight: 600; color: var(--teal-light);
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+/* ===== Showcase Section ===== */
+.showcase { padding: 120px 0; }
+.showcase-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; }
+.showcase-visual {
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--bg-card); border: 1px solid rgba(255,255,255,0.06);
+  padding: 24px;
+}
+.showcase-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+.showcase-tab {
+  padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  background: transparent; color: var(--text-dim); border: none; cursor: pointer;
+  transition: all 0.2s;
+}
+.showcase-tab.active { background: var(--teal); color: #fff; }
+.showcase-tab:hover:not(.active) { background: rgba(255,255,255,0.05); }
+.showcase-demo {
+  height: 280px; border-radius: 8px;
+  background: linear-gradient(135deg, #0d1929 0%, #1a2940 100%);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.clipboard-stack {
+  display: flex; flex-direction: column; gap: 8px; width: 80%; max-width: 320px;
+}
+.clipboard-item {
+  padding: 12px 16px; border-radius: 8px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  font-size: 13px; display: flex; align-items: center; gap: 10px;
+  animation: clipSlideIn 0.5s ease backwards;
+  transition: all 0.3s;
+}
+.clipboard-item:hover { background: rgba(91,164,164,0.1); border-color: rgba(91,164,164,0.3); }
+.clipboard-item:nth-child(1) { animation-delay: 0.1s; }
+.clipboard-item:nth-child(2) { animation-delay: 0.2s; }
+.clipboard-item:nth-child(3) { animation-delay: 0.3s; }
+.clipboard-item:nth-child(4) { animation-delay: 0.4s; }
+@keyframes clipSlideIn {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.clip-type {
+  width: 28px; height: 28px; border-radius: 6px; display: flex;
+  align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0;
+}
+.clip-type.img { background: rgba(168, 85, 247, 0.15); }
+.clip-type.txt { background: rgba(91, 164, 164, 0.15); }
+.clip-text { color: var(--text-dim); font-size: 12px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.clip-time { margin-left: auto; font-size: 11px; color: rgba(255,255,255,0.2); flex-shrink: 0; }
+
+/* ===== Free Banner ===== */
+.free-banner { padding: 100px 0; }
+.free-banner-box {
+  max-width: 860px; margin: 0 auto;
+  padding: 56px 48px; border-radius: 24px; text-align: center;
+  background: linear-gradient(135deg, rgba(91,164,164,0.10) 0%, rgba(108,99,255,0.07) 100%);
+  border: 1px solid rgba(91,164,164,0.25);
+  position: relative; overflow: hidden;
+}
+.free-banner-box::before {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, rgba(91,164,164,0.15) 0%, transparent 65%);
+  pointer-events: none;
+}
+.free-price-tag {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: clamp(56px, 8vw, 80px); font-weight: 900; line-height: 1;
+  background: linear-gradient(135deg, var(--teal-light) 0%, var(--teal) 60%, #6C63FF 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text; margin-bottom: 12px; position: relative;
+}
+.free-price-tag .won-label {
+  font-size: clamp(24px, 3.5vw, 36px); font-weight: 700;
+  -webkit-text-fill-color: var(--teal-light);
+}
+.free-banner-tagline {
+  font-size: clamp(20px, 3vw, 26px); font-weight: 800;
+  color: var(--text); margin-bottom: 20px; position: relative;
+}
+.free-banner-sub {
+  font-size: 15px; color: var(--text-dim); max-width: 520px;
+  margin: 0 auto 36px; line-height: 1.7; position: relative;
+}
+.free-features-list {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 10px 20px; list-style: none; margin-bottom: 40px; position: relative;
+}
+.free-features-list li {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14px; color: var(--text-dim);
+}
+.free-features-list li::before {
+  content: '✓'; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--teal); color: #fff; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.free-features-list li { color: var(--text); }
+.ad-notice {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-dim);
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 14px; border-radius: 99px; margin-top: 16px;
+}
+
+/* ===== Keyboard Demo ===== */
+.keyboard-demo { padding: 100px 0; text-align: center; }
+.keyboard-demo h2 {
+  font-size: clamp(24px, 3.5vw, 36px); font-weight: 800; margin-bottom: 12px;
+}
+.keyboard-demo p { color: var(--text-dim); font-size: 16px; margin-bottom: 48px; }
+.key-combos { display: flex; gap: 32px; justify-content: center; flex-wrap: wrap; }
+.key-combo {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  cursor: pointer; transition: transform 0.2s;
+}
+.key-combo:hover { transform: scale(1.05); }
+.keys { display: flex; gap: 6px; }
+.key {
+  padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  background: var(--bg-card); border: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 3px solid rgba(255,255,255,0.15);
+  color: var(--text); min-width: 40px; text-align: center;
+  transition: all 0.15s; font-family: 'Consolas', monospace;
+}
+.key-combo:hover .key {
+  border-color: var(--teal); border-bottom-color: var(--teal);
+  background: rgba(91,164,164,0.1);
+}
+.key-combo:hover .key { animation: keyPress 0.3s ease; }
+@keyframes keyPress {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(3px); border-bottom-width: 1px; }
+  100% { transform: translateY(0); border-bottom-width: 3px; }
+}
+.key-label { font-size: 13px; color: var(--text-dim); font-weight: 500; }
+
+/* ===== CTA ===== */
+.cta {
+  padding: 120px 0; text-align: center;
+}
+.cta-box {
+  max-width: 700px; margin: 0 auto; padding: 64px 48px;
+  border-radius: 24px; position: relative; overflow: hidden;
+  background: linear-gradient(135deg, rgba(91,164,164,0.12) 0%, rgba(108,99,255,0.08) 100%);
+  border: 1px solid rgba(91,164,164,0.2);
+}
+.cta-box::before {
+  content: ''; position: absolute; top: -50%; left: -50%;
+  width: 200%; height: 200%;
+  background: radial-gradient(circle at 30% 30%, rgba(91,164,164,0.1) 0%, transparent 50%);
+  animation: ctaShimmer 8s ease-in-out infinite;
+}
+@keyframes ctaShimmer {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(5%, 5%); }
+}
+.cta-box h2 {
+  position: relative; font-size: clamp(28px, 4vw, 40px); font-weight: 900;
+  margin-bottom: 16px;
+}
+.cta-box p {
+  position: relative; font-size: 17px; color: var(--text-dim); margin-bottom: 36px;
+}
+.cta-box .btn-primary { position: relative; font-size: 18px; padding: 16px 40px; }
+.version-tag {
+  position: relative; display: inline-block; margin-top: 20px;
+  font-size: 13px; color: var(--text-dim);
+}
+
+/* ===== Footer ===== */
+footer {
+  padding: 40px 0; text-align: center;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.footer-logo {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-bottom: 12px;
+}
+.footer-logo img { width: 24px; height: 24px; border-radius: 4px; object-fit: contain; }
+.footer-logo span { font-size: 14px; font-weight: 700; color: var(--text-dim); }
+.footer-sub { font-size: 12px; color: rgba(255,255,255,0.25); }
+footer a { color: var(--teal-dark); }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .showcase-grid { grid-template-columns: 1fr; gap: 40px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .free-banner-box { padding: 40px 24px; }
+  .nav-links { display: none; }
+}
+@media (max-width: 600px) {
+  .features-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .key-combos { gap: 20px; }
+  .hero h1 { letter-spacing: -1px; }
+  .cta-box { padding: 40px 24px; }
+}
+
+/* ===== Ticker / Marquee ===== */
+.ticker-wrap {
+  overflow: hidden; padding: 16px 0; margin: 40px 0 0;
+  border-top: 1px solid rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.ticker {
+  display: flex; gap: 48px; width: max-content;
+  animation: tickerScroll 30s linear infinite;
+}
+@keyframes tickerScroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.ticker span { font-size: 14px; color: var(--text-dim); white-space: nowrap; opacity: 0.5; }
+</style>
+</head>
+<body>
+
+<!-- Background -->
+<div class="bg-grid"></div>
+<div class="bg-orbs">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<!-- Navigation -->
+<nav id="navbar">
+  <div class="nav-logo">
+    <img src="logo.png" alt="Callcap" style="width:32px; height:32px; border-radius:6px; object-fit:contain;">
+    <span>Call<span style="color:var(--teal-light)">cap</span></span>
+  </div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#showcase">Showcase</a>
+    <a href="#shortcuts">Shortcuts</a>
+    <button class="btn-nav" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">Download</button>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-content">
+    <div class="hero-badge reveal">
+      <span class="dot"></span>
+      Windows 전용 &middot; 무료 다운로드
+    </div>
+    <h1 class="reveal reveal-delay-1">
+      캡처는<br><span class="gradient">Callcap</span> 하나로.
+    </h1>
+    <p class="reveal reveal-delay-2">
+      화면 캡처, OCR 텍스트 추출, GIF/MP4 녹화, 클립보드 히스토리까지.
+      단축키 한 번이면 끝나는 올인원 캡처 도구.
+    </p>
+    <div class="hero-buttons reveal reveal-delay-3">
+      <button class="btn-primary" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        무료 다운로드
+      </button>
+      <button class="btn-secondary" onclick="document.getElementById('features').scrollIntoView({behavior:'smooth'})">
+        기능 살펴보기 &rarr;
+      </button>
+    </div>
+
+    <!-- Mockup -->
+    <div class="hero-visual reveal reveal-delay-4">
+      <div class="mockup-window" id="mockup">
+        <div class="mockup-titlebar">
+          <div class="mockup-dot red"></div>
+          <div class="mockup-dot yellow"></div>
+          <div class="mockup-dot green"></div>
+          <span style="font-size:12px; color:var(--text-dim); margin-left:8px;">Callcap - Region Capture</span>
+        </div>
+        <div class="mockup-body">
+          <div class="mockup-capture-area">
+            <div class="capture-crosshair">
+              <span class="capture-size-label">420 x 280</span>
+            </div>
+          </div>
+          <div class="mockup-toolbar">
+            <span class="mockup-btn active">Copy</span>
+            <span class="mockup-btn">Pin</span>
+            <span class="mockup-btn">OCR</span>
+            <span class="mockup-btn">GIF</span>
+            <span class="mockup-btn">Edit</span>
+            <span class="mockup-btn">Save</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Stats -->
+<section class="stats">
+  <div class="container">
+    <div class="stats-grid">
+      <div class="stat-item reveal">
+        <h3><span class="counter" data-target="6">0</span>+</h3>
+        <p>Core Features</p>
+      </div>
+      <div class="stat-item reveal reveal-delay-1">
+        <h3><span class="counter" data-target="4">0</span></h3>
+        <p>Global Shortcuts</p>
+      </div>
+      <div class="stat-item reveal reveal-delay-2">
+        <h3>&lt; <span class="counter" data-target="5">0</span>MB</h3>
+        <p>Lightweight</p>
+      </div>
+      <div class="stat-item reveal reveal-delay-3">
+        <h3>100%</h3>
+        <p>무료 (광고 지원)</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="features" id="features">
+  <div class="container">
+    <div class="features-header">
+      <div class="section-label reveal">Features</div>
+      <h2 class="section-title reveal reveal-delay-1">필요한 모든 캡처 기능</h2>
+      <p class="section-desc reveal reveal-delay-2">
+        단순한 스크린샷을 넘어, 생산성을 극대화하는 스마트 캡처 경험
+      </p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <div class="feature-icon">&#9713;</div>
+        <h3>영역 캡처</h3>
+        <p>마우스 드래그로 원하는 영역만 정확하게 캡처합니다. 이미지와 파일 경로가 동시에 복사됩니다.</p>
+        <span class="shortcut">Ctrl + Shift + C</span>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-icon">&#128269;</div>
+        <h3>OCR 텍스트 추출</h3>
+        <p>캡처한 이미지에서 텍스트를 자동으로 추출합니다. 한국어, 영어, 일본어 모두 지원합니다.</p>
+        <span class="shortcut">캡처 후 OCR 버튼</span>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-icon">&#127916;</div>
+        <h3>GIF / MP4 녹화</h3>
+        <p>선택 영역을 GIF 또는 MP4로 녹화합니다. 버그 리포트나 튜토리얼 제작에 완벽합니다.</p>
+        <span class="shortcut">캡처 후 REC 버튼</span>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon">&#128203;</div>
+        <h3>클립보드 히스토리</h3>
+        <p>복사한 텍스트와 이미지를 최대 50개까지 기록합니다. 언제든 다시 꺼내 쓸 수 있습니다.</p>
+        <span class="shortcut">Ctrl + Alt + V</span>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-icon">&#128204;</div>
+        <h3>핀 윈도우</h3>
+        <p>캡처한 이미지를 항상 최상위에 고정합니다. 참고 자료를 보면서 작업할 때 유용합니다.</p>
+        <span class="shortcut">캡처 후 Pin 버튼</span>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-icon">&#128193;</div>
+        <h3>파일 위치 열기</h3>
+        <p>클립보드의 file:/// URL을 감지하여 해당 파일이 있는 폴더를 탐색기에서 바로 엽니다.</p>
+        <span class="shortcut">Ctrl + Shift + X</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Showcase -->
+<section class="showcase" id="showcase">
+  <div class="container">
+    <div class="showcase-grid">
+      <div>
+        <div class="section-label reveal">Clipboard History</div>
+        <h2 class="section-title reveal reveal-delay-1">복사한 모든 것을<br>다시 꺼내 쓰세요</h2>
+        <p class="section-desc reveal reveal-delay-2">
+          텍스트, 이미지, 파일 경로까지 — 복사한 모든 항목이 히스토리에 자동 저장됩니다.
+          단축키 하나로 히스토리 패널을 열고, 원하는 항목을 즉시 다시 복사할 수 있습니다.
+        </p>
+      </div>
+      <div class="showcase-visual reveal reveal-delay-2">
+        <div class="showcase-tabs">
+          <button class="showcase-tab active">All</button>
+          <button class="showcase-tab">Images</button>
+          <button class="showcase-tab">Text</button>
+        </div>
+        <div class="showcase-demo">
+          <div class="clipboard-stack">
+            <div class="clipboard-item">
+              <div class="clip-type img">&#128444;</div>
+              <span class="clip-text">Screenshot 1920x1080</span>
+              <span class="clip-time">3s ago</span>
+            </div>
+            <div class="clipboard-item">
+              <div class="clip-type txt">T</div>
+              <span class="clip-text">https://github.com/compl/callcap</span>
+              <span class="clip-time">1m ago</span>
+            </div>
+            <div class="clipboard-item">
+              <div class="clip-type txt">T</div>
+              <span class="clip-text">npm install @compl/callcap-sdk</span>
+              <span class="clip-time">5m ago</span>
+            </div>
+            <div class="clipboard-item">
+              <div class="clip-type img">&#128444;</div>
+              <span class="clip-text">Region capture 640x480</span>
+              <span class="clip-time">12m ago</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Keyboard Shortcuts -->
+<section class="keyboard-demo" id="shortcuts">
+  <div class="container">
+    <div class="section-label reveal" style="justify-content:center;">Shortcuts</div>
+    <h2 class="reveal reveal-delay-1">손에 익는 단축키</h2>
+    <p class="reveal reveal-delay-2">자주 쓰는 기능을 키보드로 즉시 실행하세요</p>
+    <div class="key-combos">
+      <div class="key-combo reveal">
+        <div class="keys">
+          <span class="key">Ctrl</span><span class="key">Shift</span><span class="key">C</span>
+        </div>
+        <span class="key-label">영역 캡처</span>
+      </div>
+      <div class="key-combo reveal reveal-delay-1">
+        <div class="keys">
+          <span class="key">Ctrl</span><span class="key">Shift</span><span class="key">R</span>
+        </div>
+        <span class="key-label">반복 캡처</span>
+      </div>
+      <div class="key-combo reveal reveal-delay-2">
+        <div class="keys">
+          <span class="key">Ctrl</span><span class="key">Alt</span><span class="key">V</span>
+        </div>
+        <span class="key-label">클립보드 히스토리</span>
+      </div>
+      <div class="key-combo reveal reveal-delay-3">
+        <div class="keys">
+          <span class="key">Ctrl</span><span class="key">Shift</span><span class="key">X</span>
+        </div>
+        <span class="key-label">파일 위치 열기</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Free Banner -->
+<section class="free-banner" id="free">
+  <div class="container">
+    <div class="free-banner-box reveal">
+      <div class="section-label" style="justify-content:center; margin-bottom:20px;">완전 무료</div>
+      <div class="free-price-tag"><span class="won-label">&#8361;</span>0</div>
+      <div class="free-banner-tagline">모든 기능, 완전 무료</div>
+      <p class="free-banner-sub">
+        Callcap은 알캡처처럼 광고 지원 모델로 운영됩니다.<br>
+        Pro 플랜, 인앱 결제, 기능 제한 없이 모든 기능을 무료로 사용하세요.
+      </p>
+      <ul class="free-features-list reveal reveal-delay-1">
+        <li>영역 캡처</li>
+        <li>OCR 텍스트 추출</li>
+        <li>GIF / MP4 녹화</li>
+        <li>클립보드 히스토리</li>
+        <li>핀 윈도우</li>
+        <li>파일 위치 열기</li>
+        <li>반복 캡처</li>
+        <li>이미지 에디터</li>
+        <li>평생 업데이트</li>
+      </ul>
+      <a href="https://github.com/huhyoundo/captureform/releases/latest/download/Callcap_Setup_1.0.0.exe" class="btn-primary reveal reveal-delay-2" style="font-size:17px; padding:14px 36px; text-decoration:none; color:#fff;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        무료 다운로드
+      </a>
+      <div class="ad-notice reveal reveal-delay-3">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        본 앱은 비침습적 광고로 운영됩니다 (알캡처 방식)
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta" id="download">
+  <div class="container">
+    <div class="cta-box">
+      <h2 class="reveal">지금 바로, 완전 무료로</h2>
+      <p class="reveal reveal-delay-1">
+        설치 후 시스템 트레이에서 바로 사용 가능합니다.<br>
+        Windows 10/11 지원 &middot; 5MB 이하 &middot; 설치 10초 &middot; 결제 없음
+      </p>
+      <a href="https://github.com/huhyoundo/captureform/releases/latest/download/Callcap_Setup_1.0.0.exe" class="btn-primary reveal reveal-delay-2" style="font-size:18px; padding:16px 40px; text-decoration:none; color:#fff;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        무료 다운로드 (Windows)
+      </a>
+      <div class="version-tag reveal reveal-delay-3">v1.0.0 &middot; Released April 2026 &middot; 완전 무료</div>
+    </div>
+  </div>
+</section>
+
+<!-- Ticker -->
+<div class="ticker-wrap">
+  <div class="ticker" id="ticker">
+    <span>Screen Capture</span><span>&middot;</span>
+    <span>OCR</span><span>&middot;</span>
+    <span>GIF Recording</span><span>&middot;</span>
+    <span>Clipboard History</span><span>&middot;</span>
+    <span>Pin Window</span><span>&middot;</span>
+    <span>File Drop</span><span>&middot;</span>
+    <span>Image Editor</span><span>&middot;</span>
+    <span>Repeat Capture</span><span>&middot;</span>
+    <span>MP4 Export</span><span>&middot;</span>
+    <span>Auto Save</span><span>&middot;</span>
+    <!-- duplicate for seamless scroll -->
+    <span>Screen Capture</span><span>&middot;</span>
+    <span>OCR</span><span>&middot;</span>
+    <span>GIF Recording</span><span>&middot;</span>
+    <span>Clipboard History</span><span>&middot;</span>
+    <span>Pin Window</span><span>&middot;</span>
+    <span>File Drop</span><span>&middot;</span>
+    <span>Image Editor</span><span>&middot;</span>
+    <span>Repeat Capture</span><span>&middot;</span>
+    <span>MP4 Export</span><span>&middot;</span>
+    <span>Auto Save</span><span>&middot;</span>
+  </div>
+</div>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="footer-logo">
+      <img src="logo.png" alt="COMPL">
+      <span>COMPL SOFTWARE & AI</span>
+    </div>
+    <p class="footer-sub">&copy; 2026 COMPL. All rights reserved. Made with Callcap.</p>
+  </div>
+</footer>
+
+<script>
+// ===== Scroll Reveal =====
+const revealElements = document.querySelectorAll('.reveal');
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+revealElements.forEach(el => revealObserver.observe(el));
+
+// ===== Nav scroll effect =====
+const navbar = document.getElementById('navbar');
+window.addEventListener('scroll', () => {
+  navbar.classList.toggle('scrolled', window.scrollY > 50);
+});
+
+// ===== Counter animation =====
+const counters = document.querySelectorAll('.counter');
+const counterObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const el = entry.target;
+      const target = parseInt(el.dataset.target);
+      const duration = 1500;
+      const start = performance.now();
+      const animate = (now) => {
+        const progress = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = Math.round(target * eased);
+        if (progress < 1) requestAnimationFrame(animate);
+      };
+      requestAnimationFrame(animate);
+      counterObserver.unobserve(el);
+    }
+  });
+}, { threshold: 0.5 });
+counters.forEach(el => counterObserver.observe(el));
+
+// ===== Mockup tilt on mouse =====
+const mockup = document.getElementById('mockup');
+if (mockup) {
+  mockup.addEventListener('mousemove', (e) => {
+    const rect = mockup.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width - 0.5;
+    const y = (e.clientY - rect.top) / rect.height - 0.5;
+    mockup.style.transform = `rotateY(${x * 8}deg) rotateX(${-y * 8}deg) scale(1.02)`;
+  });
+  mockup.addEventListener('mouseleave', () => {
+    mockup.style.transform = 'rotateX(4deg)';
+  });
+}
+
+// ===== Key press animation on click =====
+document.querySelectorAll('.key-combo').forEach(combo => {
+  combo.addEventListener('click', () => {
+    const keys = combo.querySelectorAll('.key');
+    keys.forEach((key, i) => {
+      setTimeout(() => {
+        key.style.transform = 'translateY(3px)';
+        key.style.borderBottomWidth = '1px';
+        setTimeout(() => {
+          key.style.transform = '';
+          key.style.borderBottomWidth = '';
+        }, 150);
+      }, i * 80);
+    });
+  });
+});
+
+// ===== Showcase tab interaction =====
+document.querySelectorAll('.showcase-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.showcase-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// ===== Smooth parallax on hero =====
+window.addEventListener('scroll', () => {
+  const scrolled = window.scrollY;
+  const heroVisual = document.querySelector('.hero-visual');
+  if (heroVisual && scrolled < window.innerHeight) {
+    heroVisual.style.transform = `translateY(${scrolled * 0.15}px)`;
+    heroVisual.style.opacity = 1 - scrolled / (window.innerHeight * 0.8);
+  }
+});
+</script>
+</body>
+</html>

@@ -1,10 +1,17 @@
 ﻿from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import shutil
 import sys
 from pathlib import Path
+
+logging.basicConfig(
+    filename=os.path.join(os.path.expanduser("~"), "callcap_debug.log"),
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 
 if getattr(sys, "frozen", False):
     if sys.stdout is None:
@@ -29,12 +36,17 @@ from capture.region_selector import CaptureActionToolbar, RegionSelector
 from capture.repeat_capture import RepeatCapture, RepeatDiffResult
 from capture.screen_capture import ScreenCaptureService
 from clipboard.clipboard_manager import ClipboardManager
+from clipboard.file_drop_popup import get_file_from_clipboard, open_file_in_explorer
 from clipboard.pin_window import PinWindow
 from ocr.ocr_dialog import OCRResultDialog
 from ocr.ocr_engine import OCREngine
 from ui.diff_dialog import RepeatDiffDialog
 from ui.history_panel import ClipboardHistoryWindow
 from ui.tray_menu import TrayMenuController
+from ads.ad_manager import AdManager
+from ads.ad_popup import AdPopupWindow
+from utils.auto_updater import AutoUpdater, CURRENT_VERSION
+from utils.update_dialog import UpdateDialog
 from utils.file_manager import FileManager
 from utils.hotkey_manager import HotkeyManager
 from utils.settings import SettingsManager
@@ -59,7 +71,7 @@ class OCRWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class SuperCaptureController(QObject):
+class CallcapController(QObject):
     request_region_capture = pyqtSignal()
     request_repeat_capture = pyqtSignal()
 
@@ -73,19 +85,21 @@ class SuperCaptureController(QObject):
 
         max_history = int(self.settings.get("clipboard", "max_history", default=50))
         self.clipboard = ClipboardManager(max_history=max_history)
+        self._file_drop_popup = None  # kept for compat
         self.ocr_engine = OCREngine(self.settings)
         self.repeat_capture = RepeatCapture()
 
         self.region_hotkey = str(self.settings.get("hotkeys", "region_capture", default="ctrl+shift+c"))
         self.repeat_hotkey = str(self.settings.get("hotkeys", "repeat_capture", default="ctrl+shift+r"))
         self.clipboard_hotkey = str(self.settings.get("hotkeys", "clipboard_history", default="ctrl+alt+v"))
+        self.file_drop_hotkey = str(self.settings.get("hotkeys", "file_drop", default="ctrl+shift+x"))
 
         startup_enabled = is_startup_enabled()
         if bool(self.settings.get("general", "start_with_windows", default=False)) != startup_enabled:
             self.settings.set(startup_enabled, "general", "start_with_windows")
 
         self.tray = TrayMenuController(
-            "SuperCapture",
+            "Callcap",
             region_hotkey=self.region_hotkey,
             repeat_hotkey=self.repeat_hotkey,
             clipboard_hotkey=self.clipboard_hotkey,
@@ -110,13 +124,26 @@ class SuperCaptureController(QObject):
         self._ocr_progress: QProgressDialog | None = None
         self._mp4_progress: QProgressDialog | None = None
 
+        # Ad system
+        self._ad_manager = AdManager()
+        self._ad_popup: AdPopupWindow | None = None
+        self._capture_count = 0
+
+        # Auto-update
+        self._updater = AutoUpdater()
+        self._updater.update_available.connect(self._on_update_available)
+
         self._setup_signals()
         self._setup_hotkeys()
         self.tray.show()
         self.tray.show_message(
-            "SuperCapture",
+            "Callcap",
             f"앱이 백그라운드에서 실행 중입니다.\n{self._display_hotkey(self.region_hotkey)} 를 눌러 화면 캡처를 시작하세요.",
         )
+
+        # Delayed startup tasks: ad popup (3s) and update check (5s)
+        QTimer.singleShot(3000, self._show_startup_ad)
+        QTimer.singleShot(5000, self._updater.check_for_updates)
 
     @staticmethod
     def _display_hotkey(raw: str) -> str:
@@ -188,39 +215,29 @@ class SuperCaptureController(QObject):
                 "trigger_on_release": trigger_on_release,
                 "debounce_ms": debounce_ms,
             },
+            "file_drop": {
+                "combo": self.file_drop_hotkey,
+                "suppress": False,
+                "trigger_on_release": False,
+                "debounce_ms": 200,
+            },
         }
 
         try:
             self.hotkeys.register_hotkeys(mapping)
-        except Exception:
-            # Fallback: if suppress mode fails on a machine, retry without suppress.
-            fallback_mapping = {
-                "region_capture": {
-                    "combo": region_hotkey,
-                    "suppress": False,
-                    "trigger_on_release": trigger_on_release,
-                    "debounce_ms": debounce_ms,
-                },
-                "repeat_capture": {
-                    "combo": repeat_hotkey,
-                    "suppress": False,
-                    "trigger_on_release": trigger_on_release,
-                    "debounce_ms": debounce_ms,
-                },
-                "clipboard_history": {
-                    "combo": clipboard_hotkey,
-                    "suppress": False,
-                    "trigger_on_release": trigger_on_release,
-                    "debounce_ms": debounce_ms,
-                },
-            }
-            try:
-                self.hotkeys.register_hotkeys(fallback_mapping)
-            except Exception as exc:
-                self.tray.show_message(
-                    "SuperCapture",
-                    f"단축키 등록에 실패했습니다: {exc}\n트레이 메뉴를 사용하세요.",
-                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Hotkey registration failed: %s", e)
+            self.tray.show_message(
+                "Callcap",
+                f"단축키 등록에 실패했습니다: {e}\n트레이 메뉴를 사용하세요.",
+            )
+
+    def _show_file_drop_popup(self) -> None:
+        file_path = get_file_from_clipboard()
+        if not file_path:
+            return
+        open_file_in_explorer(file_path)
 
     @pyqtSlot(str)
     def _on_hotkey_pressed(self, action: str) -> None:
@@ -233,14 +250,17 @@ class SuperCaptureController(QObject):
         if action == "clipboard_history":
             self.toggle_clipboard_history()
             return
+        if action == "file_drop":
+            self._show_file_drop_popup()
+            return
 
     @pyqtSlot()
     def start_region_capture(self) -> None:
         if self._is_recording():
-            self.tray.show_message("SuperCapture", "Recording is in progress. Click Stop first.")
+            self.tray.show_message("Callcap", "Recording is in progress. Click Stop first.")
             return
         if self._is_saving_mp4():
-            self.tray.show_message("SuperCapture", "MP4 is being saved. Please wait.")
+            self.tray.show_message("Callcap", "MP4 is being saved. Please wait.")
             return
         if self.selector is not None:
             return
@@ -257,10 +277,10 @@ class SuperCaptureController(QObject):
     @pyqtSlot()
     def start_repeat_capture(self) -> None:
         if self._is_recording():
-            self.tray.show_message("SuperCapture", "Recording is in progress. Click Stop first.")
+            self.tray.show_message("Callcap", "Recording is in progress. Click Stop first.")
             return
         if self._is_saving_mp4():
-            self.tray.show_message("SuperCapture", "MP4 is being saved. Please wait.")
+            self.tray.show_message("Callcap", "MP4 is being saved. Please wait.")
             return
         if self.selector is not None:
             return
@@ -269,7 +289,7 @@ class SuperCaptureController(QObject):
 
         last_region = self.repeat_capture.get_last_region()
         if last_region is None:
-            self.tray.show_message("SuperCapture", "No previous capture region found.")
+            self.tray.show_message("Callcap", "No previous capture region found.")
             return
         QTimer.singleShot(50, lambda: self._capture_and_show_toolbar(last_region, source="repeat"))
 
@@ -280,7 +300,7 @@ class SuperCaptureController(QObject):
     @pyqtSlot(QRect)
     def _on_region_selected(self, rect: QRect) -> None:
         self.selector = None
-        QTimer.singleShot(70, lambda: self._capture_and_show_toolbar(rect, source="region"))
+        QTimer.singleShot(150, lambda: self._capture_and_show_toolbar(rect, source="region"))
 
     def _capture_and_show_toolbar(self, rect, source: str = "region") -> None:
         try:
@@ -300,6 +320,11 @@ class SuperCaptureController(QObject):
         self.current_saved_path = self.file_manager.save_capture(image)
         self.repeat_capture.set_last_capture(rect, image)
 
+        # Ad after every Nth capture
+        self._capture_count += 1
+        if self._ad_manager.should_show_ad_for_capture(self._capture_count):
+            QTimer.singleShot(1500, self._show_capture_ad)
+
         # Copy image + file path to clipboard: terminals paste the path, image apps paste the image
         copy_path_enabled = bool(
             self.settings.get("capture", "copy_path_with_image", default=True)
@@ -312,18 +337,18 @@ class SuperCaptureController(QObject):
         if source == "repeat":
             changed_ratio = 0.0 if diff_result is None else diff_result.changed_ratio * 100.0
             self.tray.show_message(
-                "SuperCapture",
+                "Callcap",
                 f"Repeat captured {rect.width()}x{rect.height()} | Changed: {changed_ratio:.2f}%",
             )
         else:
             if copy_path_enabled and self.current_saved_path is not None:
                 self.tray.show_message(
-                    "SuperCapture",
+                    "Callcap",
                     f"Captured {rect.width()}x{rect.height()} — image + path copied.\n{self.current_saved_path}",
                 )
             else:
                 self.tray.show_message(
-                    "SuperCapture",
+                    "Callcap",
                     f"Captured {rect.width()}x{rect.height()} and copied to clipboard.",
                 )
 
@@ -357,10 +382,10 @@ class SuperCaptureController(QObject):
                 )
                 if copy_path_enabled and self.current_saved_path is not None:
                     self.clipboard.copy_image_with_path(self.current_image, self.current_saved_path)
-                    self.tray.show_message("SuperCapture", "Image + path copied to clipboard.")
+                    self.tray.show_message("Callcap", "Image + path copied to clipboard.")
                 else:
                     self.clipboard.copy_image(self.current_image)
-                    self.tray.show_message("SuperCapture", "Image copied to clipboard.")
+                    self.tray.show_message("Callcap", "Image copied to clipboard.")
             return
 
         if action == "pin":
@@ -388,7 +413,7 @@ class SuperCaptureController(QObject):
                 self.stop_recording()
                 return
             if self._is_saving_mp4():
-                self.tray.show_message("SuperCapture", "MP4 is being saved. Please wait.")
+                self.tray.show_message("Callcap", "MP4 is being saved. Please wait.")
                 return
             self._cleanup_recorder()
             self._reset_toolbar()
@@ -407,7 +432,7 @@ class SuperCaptureController(QObject):
         if not filename:
             return
         self.current_image.save(filename)
-        self.tray.show_message("SuperCapture", f"Saved: {filename}")
+        self.tray.show_message("Callcap", f"Saved: {filename}")
 
     def start_recording(self) -> None:
         if self.current_region is None:
@@ -445,7 +470,7 @@ class SuperCaptureController(QObject):
             self.toolbar.set_record_busy(False)
 
         self.tray.show_message(
-            "SuperCapture",
+            "Callcap",
             "Recording started. Click Stop in the toolbar when done.",
         )
 
@@ -456,7 +481,7 @@ class SuperCaptureController(QObject):
         if self.toolbar is not None:
             self.toolbar.set_record_busy(True)
 
-        self.tray.show_message("SuperCapture", "Stopping recording and saving GIF...")
+        self.tray.show_message("Callcap", "Stopping recording and saving GIF...")
         if self.region_recorder is not None:
             self.region_recorder.stop()
 
@@ -470,7 +495,7 @@ class SuperCaptureController(QObject):
         image_bytes = ScreenCaptureService.image_to_png_bytes(self.current_image)
 
         self._ocr_progress = QProgressDialog("텍스트 추출 중...", None, 0, 0)
-        self._ocr_progress.setWindowTitle("SuperCapture OCR")
+        self._ocr_progress.setWindowTitle("Callcap OCR")
         self._ocr_progress.setCancelButton(None)
         self._ocr_progress.setMinimumDuration(0)
         self._ocr_progress.setAutoClose(False)
@@ -537,7 +562,7 @@ class SuperCaptureController(QObject):
             self._mp4_progress.close()
             self._mp4_progress = None
         self._mp4_progress = QProgressDialog("MP4로 저장 중입니다...", None, 0, 0)
-        self._mp4_progress.setWindowTitle("SuperCapture MP4")
+        self._mp4_progress.setWindowTitle("Callcap MP4")
         self._mp4_progress.setCancelButton(None)
         self._mp4_progress.setMinimumDuration(0)
         self._mp4_progress.setAutoClose(False)
@@ -560,7 +585,7 @@ class SuperCaptureController(QObject):
             self.toolbar.show_mp4_button(True)
 
         self.tray.show_message(
-            "SuperCapture",
+            "Callcap",
             f"Recording saved: {path.name} ({elapsed:.1f}s, {frame_count} frames)",
         )
 
@@ -575,10 +600,10 @@ class SuperCaptureController(QObject):
 
     def save_recording_as_mp4(self) -> None:
         if self.region_recorder is None or not self.region_recorder.has_frames:
-            self.tray.show_message("SuperCapture", "No recorded frames available for MP4.")
+            self.tray.show_message("Callcap", "No recorded frames available for MP4.")
             return
         if self.region_recorder.is_saving_mp4:
-            self.tray.show_message("SuperCapture", "MP4 is already being saved.")
+            self.tray.show_message("Callcap", "MP4 is already being saved.")
             return
 
         mp4_path = self.file_manager.create_recording_path("mp4")
@@ -591,7 +616,7 @@ class SuperCaptureController(QObject):
             self.toolbar.set_record_busy(True)
 
         self._show_mp4_progress()
-        self.tray.show_message("SuperCapture", "Saving MP4...")
+        self.tray.show_message("Callcap", "Saving MP4...")
         self.region_recorder.save_as_mp4(mp4_path)
 
     @pyqtSlot(str)
@@ -599,7 +624,7 @@ class SuperCaptureController(QObject):
         path = Path(output_path)
         self._hide_mp4_progress()
         self.tray.show_message(
-            "SuperCapture",
+            "Callcap",
             f"MP4로 저장되었습니다: {path.name}\n클릭하면 파일 위치를 엽니다.",
             on_click=lambda p=path: self._reveal_file_in_explorer(p),
             duration_ms=6000,
@@ -615,7 +640,7 @@ class SuperCaptureController(QObject):
     @pyqtSlot(str)
     def _on_mp4_failed(self, error: str) -> None:
         self._hide_mp4_progress()
-        self.tray.show_message("SuperCapture", f"MP4 save failed: {error}")
+        self.tray.show_message("Callcap", f"MP4 save failed: {error}")
 
         if self.toolbar is not None:
             mp4_btn = self.toolbar._buttons.get("mp4")
@@ -731,15 +756,53 @@ class SuperCaptureController(QObject):
         if success:
             self.settings.set(enabled, "general", "start_with_windows")
             state = "등록" if enabled else "해제"
-            self.tray.show_message("SuperCapture", f"시작 프로그램에 {state}되었습니다.")
+            self.tray.show_message("Callcap", f"시작 프로그램에 {state}되었습니다.")
         else:
             self.tray.set_startup_checked(not enabled)
-            self.tray.show_message("SuperCapture", "시작 프로그램 설정에 실패했습니다.")
+            self.tray.show_message("Callcap", "시작 프로그램 설정에 실패했습니다.")
+
+    # ------------------------------------------------------------------
+    # Ad system
+    # ------------------------------------------------------------------
+
+    def _show_startup_ad(self) -> None:
+        if self._ad_manager.should_show_ad():
+            self._show_ad()
+
+    def _show_capture_ad(self) -> None:
+        self._show_ad()
+
+    def _show_ad(self) -> None:
+        if self._ad_popup is not None:
+            return
+        ad_data = self._ad_manager.get_ad_data()
+        popup = AdPopupWindow(ad_data)
+        popup.ad_clicked.connect(lambda ad_id: self._ad_manager.record_ad_clicked(ad_id))
+        popup.suppressed_today.connect(self._ad_manager.suppress_today)
+        popup.destroyed.connect(lambda: setattr(self, '_ad_popup', None))
+        self._ad_popup = popup
+        popup.show()
+        self._ad_manager.record_ad_shown()
+
+    # ------------------------------------------------------------------
+    # Auto-update
+    # ------------------------------------------------------------------
+
+    @pyqtSlot(str, str, str)
+    def _on_update_available(self, version: str, download_url: str, notes: str) -> None:
+        dialog = UpdateDialog(
+            current_version=CURRENT_VERSION,
+            new_version=version,
+            download_url=download_url,
+            release_notes=notes,
+            updater=self._updater,
+        )
+        dialog.exec()
 
     @pyqtSlot()
     def shutdown(self) -> None:
         if self._is_saving_mp4():
-            self.tray.show_message("SuperCapture", "MP4 is being saved. Quit after it finishes.")
+            self.tray.show_message("Callcap", "MP4 is being saved. Quit after it finishes.")
             return
         self.hotkeys.unregister_all()
         if self._is_recording():
@@ -770,7 +833,7 @@ def resolve_config_path() -> Path:
 
     appdata = os.environ.get("APPDATA")
     base_dir = Path(appdata) if appdata else (Path.home() / "AppData" / "Roaming")
-    config_dir = base_dir / "SuperCapture"
+    config_dir = base_dir / "Callcap"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
 
@@ -840,7 +903,7 @@ def _ensure_single_instance() -> bool:
     try:
         import ctypes
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        mutex = kernel32.CreateMutexW(None, True, "SuperCapture_SingleInstance_Mutex")
+        mutex = kernel32.CreateMutexW(None, True, "Callcap_SingleInstance_Mutex")
         last_err = ctypes.get_last_error()
         if mutex in (0, None):
             return True  # Allow running if CreateMutex failed
@@ -864,21 +927,21 @@ def main() -> int:
     if not _ensure_single_instance():
         QMessageBox.information(
             None,
-            "SuperCapture",
-            "SuperCapture is already running.\nUse the tray icon to continue.",
+            "Callcap",
+            "Callcap is already running.\nUse the tray icon to continue.",
         )
         return 0
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "SuperCapture", "System tray is not available on this system.")
+        QMessageBox.critical(None, "Callcap", "System tray is not available on this system.")
         return 1
 
     apply_styles(app)
 
     try:
-        controller = SuperCaptureController(app, config_path=resolve_config_path())
+        controller = CallcapController(app, config_path=resolve_config_path())
     except Exception as exc:
-        QMessageBox.critical(None, "SuperCapture", f"Startup failed:\n{exc}")
+        QMessageBox.critical(None, "Callcap", f"Startup failed:\n{exc}")
         return 1
 
     app.aboutToQuit.connect(controller.hotkeys.unregister_all)
