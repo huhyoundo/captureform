@@ -90,6 +90,7 @@ class HotkeyManager(QObject):
         normalized = self._normalize_mapping(mapping)
         self._validate_conflicts(normalized)
 
+        failed: list[str] = []
         for action, hotkey in normalized.items():
             combo = hotkey["combo"]
             if not combo:
@@ -101,11 +102,19 @@ class HotkeyManager(QObject):
             ok = user32.RegisterHotKey(None, hotkey_id, modifiers | MOD_NOREPEAT, vk)
             if not ok:
                 code = ctypes.get_last_error()
-                self.unregister_all()
-                raise RuntimeError(f"RegisterHotKey failed for '{combo}' (code={code})")
+                failed.append(f"'{combo}' (code={code})")
+                continue
 
             self._id_to_action[hotkey_id] = action
             self._debounce_ms_by_action[action] = int(hotkey["debounce_ms"])
+
+        if failed and not self._id_to_action:
+            raise RuntimeError(f"RegisterHotKey failed for all: {', '.join(failed)}")
+        if failed:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Some hotkeys failed to register: %s", ", ".join(failed)
+            )
 
     def unregister_all(self) -> None:
         if os.name != "nt":
