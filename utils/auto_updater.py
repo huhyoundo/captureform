@@ -23,7 +23,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 # ---------------------------------------------------------------------------
 # Public constant – bump this on every release build.
 # ---------------------------------------------------------------------------
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.1"
 
 # GitHub repository to query.  Change owner/repo before shipping.
 _GITHUB_OWNER = "huhyoundo"

@@ -15,7 +15,7 @@ _log = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_AD_URL = "https://api.compl.kr/ads/callcap"
+_DEFAULT_AD_URL = "https://raw.githubusercontent.com/huhyoundo/captureform/master/ads/callcap_ad.json"
 _COOLDOWN_SECONDS = 10 * 60  # 10 minutes between ad shows
 _CAPTURE_INTERVAL = 5         # Show ad every Nth capture
 _NETWORK_TIMEOUT = 5          # Seconds before network fetch times out

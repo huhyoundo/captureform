@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6+ (https://jrsoftware.org/isinfo.php)
 
 #define MyAppName "Callcap"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "COMPL SOFTWARE & AI"
 #define MyAppExeName "Callcap.exe"
 #define MyAppURL "https://compl.kr/callcap"
