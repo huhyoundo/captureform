@@ -11,11 +11,14 @@ class EditorScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.base_image_item = None
+        self.base_image = None
         self.active_tool = None
         
     def set_base_image(self, image: QImage):
         """배경이 되는 원본 이미지를 설정합니다."""
         self.clear() # 모든 기존 아이템 제거
+        # 모자이크가 원본 픽셀을 읽을 수 있도록 원본 이미지를 보관한다.
+        self.base_image = image.convertToFormat(QImage.Format.Format_ARGB32)
         pixmap = QPixmap.fromImage(image)
         self.base_image_item = self.addPixmap(pixmap)
         self.base_image_item.setZValue(-1000) # 가장 뒤로

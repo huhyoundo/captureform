@@ -6,26 +6,43 @@ import mss
 
 
 class ScreenCaptureService:
+    """Capture a global logical (device-independent) rect of the desktop.
+
+    Qt6 on Windows keeps each screen's top-left in physical pixels and scales
+    only its size, so a logical point p on screen s sits at physical
+    s.topLeft + (p - s.topLeft) * dpr. Every path below maps per screen with
+    that rule; using the logical rect as physical pixels grabs the wrong area
+    on scaled monitors (125%, 150%, 200%).
+    """
+
     def capture_region(self, rect: QRect) -> QImage:
         capture_rect = rect.normalized()
         if capture_rect.width() <= 0 or capture_rect.height() <= 0:
             raise ValueError("Capture rect must have positive width and height")
 
-        # Qt selector/geometry coordinates are device-independent.
-        # Capturing with Qt first helps prevent DPI-related offset issues.
         image = self._capture_region_qt(capture_rect)
         if image is not None and not image.isNull() and not self._is_blank(image):
             return image
 
-        return self._capture_region_mss(capture_rect)
+        # Qt grabs can come back empty on some GPU/driver setups. Retry with
+        # mss using the same per-screen physical mapping. A genuinely uniform
+        # area (a blank document) produces the same pixels either way.
+        try:
+            fallback = self._capture_region_mss(capture_rect)
+        except Exception:
+            fallback = None
+        if fallback is not None and not fallback.isNull():
+            return fallback
+        if image is not None and not image.isNull():
+            return image
+        raise RuntimeError("Selected area is not on any screen.")
 
     @staticmethod
     def _is_blank(image: QImage) -> bool:
-        """Return True if the image is essentially blank (all white/transparent)."""
+        """Return True if the image is essentially blank (one color everywhere)."""
         w, h = image.width(), image.height()
         if w == 0 or h == 0:
             return True
-        # Sample a grid of pixels — fast enough and catches blank captures.
         step_x = max(1, w // 8)
         step_y = max(1, h // 8)
         first = image.pixel(0, 0)
@@ -35,24 +52,31 @@ class ScreenCaptureService:
                     return False
         return True
 
-    def _capture_region_qt(self, rect: QRect) -> QImage | None:
-        screens = QGuiApplication.screens()
-        if not screens:
-            return None
+    @staticmethod
+    def _pieces(rect: QRect):
+        """Yield (screen, logical intersection, physical rect) per overlapping screen."""
+        for screen in QGuiApplication.screens():
+            screen_rect = screen.geometry()
+            inter = rect.intersected(screen_rect)
+            if inter.isEmpty():
+                continue
+            dpr = float(screen.devicePixelRatio()) or 1.0
+            origin = screen_rect.topLeft()
+            px = origin.x() + int(round((inter.x() - origin.x()) * dpr))
+            py = origin.y() + int(round((inter.y() - origin.y()) * dpr))
+            pw = max(1, int(round(inter.width() * dpr)))
+            ph = max(1, int(round(inter.height() * dpr)))
+            yield screen, inter, QRect(px, py, pw, ph)
 
+    def _capture_region_qt(self, rect: QRect) -> QImage | None:
         result = QImage(rect.size(), QImage.Format.Format_ARGB32)
         result.fill(0)
 
         painter = QPainter(result)
         drawn = False
         try:
-            for screen in screens:
-                screen_rect = screen.geometry()
-                inter = rect.intersected(screen_rect)
-                if inter.isEmpty():
-                    continue
-
-                local_rect = inter.translated(-screen_rect.topLeft())
+            for screen, inter, _physical in self._pieces(rect):
+                local_rect = inter.translated(-screen.geometry().topLeft())
                 pixmap = screen.grabWindow(
                     0,
                     int(local_rect.x()),
@@ -78,25 +102,38 @@ class ScreenCaptureService:
 
         return result if drawn else None
 
-    def _capture_region_mss(self, rect: QRect) -> QImage:
-        monitor = {
-            "left": int(rect.x()),
-            "top": int(rect.y()),
-            "width": int(rect.width()),
-            "height": int(rect.height()),
-        }
+    def _capture_region_mss(self, rect: QRect) -> QImage | None:
+        result = QImage(rect.size(), QImage.Format.Format_ARGB32)
+        result.fill(0)
 
-        with mss.mss() as sct:
-            shot = sct.grab(monitor)
+        painter = QPainter(result)
+        drawn = False
+        try:
+            with mss.mss() as sct:
+                for _screen, inter, physical in self._pieces(rect):
+                    shot = sct.grab(
+                        {
+                            "left": physical.x(),
+                            "top": physical.y(),
+                            "width": physical.width(),
+                            "height": physical.height(),
+                        }
+                    )
+                    piece = QImage(
+                        shot.bgra,
+                        shot.width,
+                        shot.height,
+                        shot.width * 4,
+                        QImage.Format.Format_RGB32,
+                    ).copy()
+                    if piece.size() != inter.size():
+                        piece = piece.scaled(inter.size())
+                    painter.drawImage(inter.topLeft() - rect.topLeft(), piece)
+                    drawn = True
+        finally:
+            painter.end()
 
-        image = QImage(
-            shot.bgra,
-            shot.width,
-            shot.height,
-            shot.width * 4,
-            QImage.Format.Format_ARGB32,
-        )
-        return image.copy()
+        return result if drawn else None
 
     @staticmethod
     def image_to_png_bytes(image: QImage) -> bytes:

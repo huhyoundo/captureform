@@ -92,7 +92,13 @@ class CallcapController(QObject):
         self.region_hotkey = str(self.settings.get("hotkeys", "region_capture", default="ctrl+shift+c"))
         self.repeat_hotkey = str(self.settings.get("hotkeys", "repeat_capture", default="ctrl+shift+r"))
         self.clipboard_hotkey = str(self.settings.get("hotkeys", "clipboard_history", default="ctrl+alt+v"))
-        self.file_drop_hotkey = str(self.settings.get("hotkeys", "file_drop", default="ctrl+shift+x"))
+        # Ctrl+Shift+X collides with Photoshop (Liquify) because RegisterHotKey
+        # swallows the combo system-wide, so the default moved to Ctrl+Shift+Q.
+        file_drop = str(self.settings.get("hotkeys", "file_drop", default="ctrl+shift+q"))
+        if file_drop.replace(" ", "").lower() == "ctrl+shift+x":
+            file_drop = "ctrl+shift+q"
+            self.settings.set(file_drop, "hotkeys", "file_drop")
+        self.file_drop_hotkey = file_drop
 
         startup_enabled = is_startup_enabled()
         if bool(self.settings.get("general", "start_with_windows", default=False)) != startup_enabled:
@@ -116,6 +122,7 @@ class CallcapController(QObject):
         self.current_image: QImage | None = None
         self.current_region = None
         self.current_saved_path: Path | None = None
+        self._recording_still_path: Path | None = None
         self.editor_windows: list[object] = []
         self.pin_windows: list[PinWindow] = []
 
@@ -315,6 +322,7 @@ class CallcapController(QObject):
 
         self.current_image = image
         self.current_region = rect
+        self._recording_still_path = None
 
         # Save first so we have the file path for clipboard
         self.current_saved_path = self.file_manager.save_capture(image)
@@ -448,6 +456,12 @@ class CallcapController(QObject):
             fps = 24
         fps = max(8, min(60, fps))
 
+        # The still PNG auto-saved when the region was picked is replaced by the
+        # recording once it is written, so a recording leaves one file only.
+        if self._recording_still_path is None and self.current_saved_path is not None:
+            if self.current_saved_path.suffix.lower() not in {".gif", ".mp4"}:
+                self._recording_still_path = self.current_saved_path
+
         output_path = self.file_manager.create_recording_path("gif")
         recorder = RegionRecordingSession(
             capture_service=self.capture_service,
@@ -574,19 +588,38 @@ class CallcapController(QObject):
             self._mp4_progress.close()
             self._mp4_progress = None
 
+    @staticmethod
+    def _delete_quietly(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Could not remove %s: %s", path, exc)
+
     @pyqtSlot(str, int, float)
     def _on_recording_finished(self, output_path: str, frame_count: int, elapsed: float) -> None:
         path = Path(output_path)
+
+        # One recording, one file: drop the still screenshot taken when the
+        # region was picked, then hand the GIF to the clipboard.
+        self._delete_quietly(self._recording_still_path)
+        self._recording_still_path = None
         self.current_saved_path = path
+        self.clipboard.copy_file_path(path)
 
         if self.toolbar is not None:
             self.toolbar.set_recording(False)
             self.toolbar.set_record_busy(False)
+            self.toolbar.set_recording_result_mode(True)
             self.toolbar.show_mp4_button(True)
 
         self.tray.show_message(
             "Callcap",
-            f"Recording saved: {path.name} ({elapsed:.1f}s, {frame_count} frames)",
+            f"GIF로 저장되고 경로가 복사되었습니다: {path.name} ({elapsed:.1f}초)\n"
+            "MP4가 필요하면 MP4 버튼을 누르세요. GIF가 MP4로 바뀝니다.",
+            on_click=lambda p=path: self._reveal_file_in_explorer(p),
+            duration_ms=6000,
         )
 
     @pyqtSlot(str)
@@ -623,9 +656,20 @@ class CallcapController(QObject):
     def _on_mp4_finished(self, output_path: str) -> None:
         path = Path(output_path)
         self._hide_mp4_progress()
+
+        # MP4 replaces the GIF of the same recording instead of adding a copy.
+        previous = self.current_saved_path
+        if previous is not None and previous != path and previous.suffix.lower() == ".gif":
+            self._delete_quietly(previous)
+        self.current_saved_path = path
+        self.clipboard.copy_file_path(path)
+
+        if self.toolbar is not None:
+            self.toolbar.show_mp4_button(False)
+
         self.tray.show_message(
             "Callcap",
-            f"MP4로 저장되었습니다: {path.name}\n클릭하면 파일 위치를 엽니다.",
+            f"MP4로 저장되고 경로가 복사되었습니다: {path.name}\n클릭하면 파일 위치를 엽니다.",
             on_click=lambda p=path: self._reveal_file_in_explorer(p),
             duration_ms=6000,
         )

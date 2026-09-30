@@ -1,0 +1,5 @@
+[lint.per-file-ignores]
+# These modules set up logging, stdio or sys.path before importing Qt on purpose.
+"main.py" = ["E402"]
+"capture_editor/editor_window.py" = ["E402"]
+"clipboard/clipboard_manager.py" = ["E402"]

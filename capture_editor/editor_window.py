@@ -23,12 +23,14 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QColorDialog,
+    QFrame,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSlider,
@@ -43,9 +45,16 @@ from capture.screen_capture import ScreenCaptureService
 from capture_editor.canvas.canvas_scene import EditorScene
 from capture_editor.canvas.editor_canvas import EditorCanvas
 from capture_editor.items.arrow_item import ArrowItem
+from capture_editor.items.mosaic_item import (
+    DEFAULT_BLOCK_SIZE,
+    MAX_BLOCK_SIZE,
+    MIN_BLOCK_SIZE,
+    MosaicItem,
+)
 from capture_editor.items.shape_item import ShapeItem
 from capture_editor.items.text_item import TextItem
 from capture_editor.tools.arrow_tool import ArrowTool
+from capture_editor.tools.mosaic_tool import MosaicTool
 from capture_editor.tools.shape_tool import ShapeTool
 from capture_editor.tools.spotlight_tool import SpotlightTool
 from capture_editor.tools.text_tool import TextTool
@@ -107,8 +116,16 @@ class EditorWindow(QMainWindow):
         self.btn_shape = QPushButton("Shape")
         self.btn_text = QPushButton("Text")
         self.btn_spotlight = QPushButton("Focus")
+        self.btn_mosaic = QPushButton("Mosaic")
+        self.btn_mosaic.setToolTip("드래그한 부분을 모자이크 처리합니다")
 
-        for btn in [self.btn_arrow, self.btn_shape, self.btn_text, self.btn_spotlight]:
+        for btn in [
+            self.btn_arrow,
+            self.btn_shape,
+            self.btn_text,
+            self.btn_spotlight,
+            self.btn_mosaic,
+        ]:
             btn.setCheckable(True)
             btn.setProperty("class", "tool-btn")
             tool_layout.addWidget(btn)
@@ -239,6 +256,21 @@ class EditorWindow(QMainWindow):
         text_size_row.addWidget(self.spin_text_size)
         prop_layout.addLayout(text_size_row)
 
+        prop_layout.addWidget(QLabel("Mosaic Strength"))
+        mosaic_row = QHBoxLayout()
+        self.slider_mosaic = QSlider(Qt.Orientation.Horizontal)
+        self.slider_mosaic.setRange(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+        self.slider_mosaic.setValue(DEFAULT_BLOCK_SIZE)
+        self.slider_mosaic.setToolTip("값이 클수록 모자이크 칸이 커집니다")
+        mosaic_row.addWidget(self.slider_mosaic, 1)
+        self.spin_mosaic = QSpinBox()
+        self.spin_mosaic.setRange(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+        self.spin_mosaic.setValue(DEFAULT_BLOCK_SIZE)
+        mosaic_row.addWidget(self.spin_mosaic)
+        self.slider_mosaic.valueChanged.connect(self._on_mosaic_slider_changed)
+        self.spin_mosaic.valueChanged.connect(self._on_mosaic_spin_changed)
+        prop_layout.addLayout(mosaic_row)
+
         self.check_text_tail = QCheckBox("Text Tail")
         self.check_text_tail.setChecked(False)
         self.check_text_tail.toggled.connect(self._on_property_changed)
@@ -249,7 +281,18 @@ class EditorWindow(QMainWindow):
         )
 
         self._init_top_toolbar()
-        main_layout.addWidget(self.property_panel)
+        # The property list is taller than a 768px laptop screen, so it
+        # scrolls instead of forcing the window past the screen edge.
+        self.property_scroll = QScrollArea()
+        self.property_scroll.setWidget(self.property_panel)
+        self.property_scroll.setWidgetResizable(True)
+        self.property_scroll.setFixedWidth(336)
+        self.property_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.property_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.property_scroll.setStyleSheet(
+            "QScrollArea { background-color: rgba(22, 33, 62, 0.9); border: none; }"
+        )
+        main_layout.addWidget(self.property_scroll)
 
     def _init_top_toolbar(self) -> None:
         toolbar = self.addToolBar("Editor")
@@ -290,6 +333,7 @@ class EditorWindow(QMainWindow):
             self.btn_shape: ShapeTool(self.scene, self.history_stack),
             self.btn_text: TextTool(self.scene, self.history_stack),
             self.btn_spotlight: SpotlightTool(self.scene, self.history_stack),
+            self.btn_mosaic: MosaicTool(self.scene, self.history_stack),
         }
         self._on_tool_selected(self.btn_arrow)
 
@@ -459,6 +503,20 @@ class EditorWindow(QMainWindow):
         self.text_font_size = value
         self._on_property_changed()
 
+    def _on_mosaic_slider_changed(self, value: int) -> None:
+        if self.spin_mosaic.value() != value:
+            self.spin_mosaic.blockSignals(True)
+            self.spin_mosaic.setValue(value)
+            self.spin_mosaic.blockSignals(False)
+        self._on_property_changed()
+
+    def _on_mosaic_spin_changed(self, value: int) -> None:
+        if self.slider_mosaic.value() != value:
+            self.slider_mosaic.blockSignals(True)
+            self.slider_mosaic.setValue(value)
+            self.slider_mosaic.blockSignals(False)
+        self._on_property_changed()
+
     def _on_tool_selected(self, active_btn: QPushButton) -> None:
         for btn, tool in self.tools.items():
             if btn == active_btn:
@@ -499,6 +557,10 @@ class EditorWindow(QMainWindow):
             text_tool.current_text_stroke_color = QColor(self.text_stroke_color)
             text_tool.current_has_tail = bool(self.check_text_tail.isChecked())
 
+        mosaic_tool = self.tools.get(self.btn_mosaic)
+        if isinstance(mosaic_tool, MosaicTool):
+            mosaic_tool.current_block_size = int(self.slider_mosaic.value())
+
         self._apply_style_to_selected_items(width)
 
     def _apply_style_to_selected_items(self, width: float) -> None:
@@ -519,6 +581,9 @@ class EditorWindow(QMainWindow):
                 item.set_fill_color(self.shape_fill_color)
                 item.set_pen_width(width)
                 item.set_shape_type(shape_type_map.get(self.combo_shape.currentIndex(), "rect"))
+
+            elif isinstance(item, MosaicItem):
+                item.set_block_size(int(self.slider_mosaic.value()))
 
             elif isinstance(item, TextItem):
                 item.set_style(

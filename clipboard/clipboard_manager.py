@@ -119,6 +119,28 @@ class ClipboardManager(QObject):
             text=str(file_path),
         ))
 
+    def copy_file_path(self, file_path: Path | str) -> None:
+        """Copy a file as path text plus a file URL.
+
+        Terminals and prompts paste the path; Explorer and messengers paste
+        the file itself (Qt maps the URL to CF_HDROP on Windows).
+        """
+        self._suppress_count += 1
+        clipboard = QApplication.clipboard()
+
+        mime = QMimeData()
+        mime.setText(str(file_path))
+        mime.setUrls([QUrl.fromLocalFile(str(file_path))])
+        clipboard.setMimeData(mime)
+
+        self._last_text = str(file_path)
+        self._last_image_hash = ""
+        self._add_entry(ClipboardEntry(
+            entry_type="text",
+            timestamp=datetime.now(),
+            text=str(file_path),
+        ))
+
     def copy_text(self, text: str) -> None:
         self._suppress_count += 1
         clipboard = QApplication.clipboard()

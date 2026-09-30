@@ -50,6 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "region_capture": "ctrl+shift+c",
         "repeat_capture": "ctrl+shift+r",
         "clipboard_history": "ctrl+alt+v",
+        "file_drop": "ctrl+shift+q",
         "region_capture_suppress": False,
         "repeat_capture_suppress": False,
         "trigger_on_release": True,
