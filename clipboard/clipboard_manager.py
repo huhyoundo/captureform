@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
+import time
 from datetime import datetime
 from typing import Literal
 from urllib.parse import unquote, urlparse
@@ -54,6 +55,27 @@ def _image_hash(image: QImage) -> str:
         return ""
 
 
+# How long after a capture an accidental terminal selection may be undone.
+_RESTORE_WINDOW_SEC = 30 * 60
+
+# Box drawing, block elements and the Claude Code prompt arrow. A selection made
+# of nothing else is a mis-click on a TUI border, never something to paste.
+_BORDER_CHARS = {chr(c) for c in range(0x2500, 0x25A0)} | {"❯", "•", "·"}
+
+
+def is_accidental_selection(text: str) -> bool:
+    """True for clipboard text that only an accidental TUI selection produces.
+
+    Claude Code's fullscreen mode copies on select. Clicking into its pane to
+    paste a screenshot easily drags across the input box border, which puts
+    "────" (or an empty selection) on the clipboard and replaces the capture.
+    """
+    stripped = "".join(ch for ch in text if not ch.isspace())
+    if not stripped:
+        return True
+    return all(ch in _BORDER_CHARS for ch in stripped)
+
+
 def _make_thumbnail(image: QImage, size: int = 80) -> QImage:
     return image.scaled(
         size, size,
@@ -75,6 +97,9 @@ class ClipboardManager(QObject):
         self._last_image_hash: str = ""
         self._suppress_count: int = 0
         self._last_enriched_path: str = ""  # prevents file:/// re-enrichment loop
+        # What Callcap itself last put on the clipboard (capture or recording),
+        # kept so an accidental terminal selection right after can be undone.
+        self._own_copy: dict | None = None
 
         clipboard = QApplication.clipboard()
         if clipboard is not None:
@@ -108,6 +133,7 @@ class ClipboardManager(QObject):
         mime.setUrls([QUrl.fromLocalFile(str(file_path))])
 
         clipboard.setMimeData(mime)
+        self._own_copy = {"kind": "image_with_path", "image": image.copy(), "path": str(file_path), "at": time.time()}
 
         self._last_image_hash = _image_hash(image)
         self._last_text = str(file_path)
@@ -132,6 +158,7 @@ class ClipboardManager(QObject):
         mime.setText(str(file_path))
         mime.setUrls([QUrl.fromLocalFile(str(file_path))])
         clipboard.setMimeData(mime)
+        self._own_copy = {"kind": "file_path", "path": str(file_path), "at": time.time()}
 
         self._last_text = str(file_path)
         self._last_image_hash = ""
@@ -261,6 +288,41 @@ class ClipboardManager(QObject):
             self.history = self.history[:self.max_history]
         self.history_changed.emit()
 
+    def _restore_own_copy(self) -> None:
+        own = self._own_copy
+        if own is None:
+            return
+        clipboard = QApplication.clipboard()
+        mime = QMimeData()
+        if own["kind"] == "image_with_path":
+            mime.setImageData(own["image"])
+        mime.setText(own["path"])
+        mime.setUrls([QUrl.fromLocalFile(own["path"])])
+        self._suppress_count += 1
+        clipboard.setMimeData(mime)
+        self._last_text = own["path"]
+        _log.info("accidental selection replaced the capture; restored %s", own["path"])
+
+    def _maybe_restore_after_accident(self, mime: QMimeData) -> bool:
+        """Undo a border/empty selection that landed right after our capture."""
+        own = self._own_copy
+        if own is None:
+            return False
+        if time.time() - float(own["at"]) > _RESTORE_WINDOW_SEC:
+            self._own_copy = None
+            return False
+        if mime.hasImage() or mime.hasUrls():
+            return False
+        text = mime.text() if mime.hasText() else ""
+        if text == own["path"] or not is_accidental_selection(text):
+            return False
+        if not Path(own["path"]).exists():
+            self._own_copy = None
+            return False
+        _log.info("clipboard became an accidental selection %r after a capture", text[:20])
+        QTimer.singleShot(0, self._restore_own_copy)
+        return True
+
     def _on_clipboard_changed(self) -> None:
         """Called by Qt's clipboard.dataChanged signal (instant, no polling)."""
         if self._suppress_count > 0:
@@ -273,6 +335,14 @@ class ClipboardManager(QObject):
             mime = clipboard.mimeData()
             if mime is None:
                 return
+
+            if self._maybe_restore_after_accident(mime):
+                return
+            # Anything else the user copies on purpose ends the restore window.
+            if self._own_copy is not None:
+                current = mime.text() if mime.hasText() else ""
+                if current != self._own_copy["path"]:
+                    self._own_copy = None
 
             # Check text FIRST - avoids misclassifying rich-text copies as images
             if mime.hasText():
