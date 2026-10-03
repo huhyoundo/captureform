@@ -23,7 +23,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 # ---------------------------------------------------------------------------
 # Public constant – bump this on every release build.
 # ---------------------------------------------------------------------------
-CURRENT_VERSION = "1.2.0"
+CURRENT_VERSION = "1.2.2"
 
 # GitHub repository to query.  Change owner/repo before shipping.
 _GITHUB_OWNER = "huhyoundo"
@@ -303,12 +303,17 @@ class AutoUpdater(QObject):
         self._start_worker(download_url=download_url, slot="run_download")
 
     @staticmethod
-    def install_update(installer_path: str) -> None:
+    def install_update(installer_path: str, very_silent: bool = False) -> None:
         """Launch the installer silently and quit the application.
 
-        Uses the Inno Setup ``/SILENT`` flag.  The current process exits
+        The installer's [Run] entry restarts Callcap after any silent install,
+        so the user never has to start it again. The current process exits
         immediately so the installer can overwrite files in use.
         """
+        if very_silent:
+            args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"]
+        else:
+            args = ["/SILENT"]
         path = Path(installer_path)
         if not path.exists():
             log.error("Installer not found at %s", installer_path)
@@ -317,7 +322,7 @@ class AutoUpdater(QObject):
         log.info("Launching installer: %s", installer_path)
         try:
             subprocess.Popen(
-                [str(path), "/SILENT"],
+                [str(path), *args],
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
         except OSError as exc:

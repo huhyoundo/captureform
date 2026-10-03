@@ -29,6 +29,9 @@ _ASPECT_KEYS = {
     Qt.Key.Key_0: 0, Qt.Key.Key_1: 1, Qt.Key.Key_2: 2, Qt.Key.Key_3: 3, Qt.Key.Key_4: 4,
 }
 _CLICK_SLOP = 4  # px of movement that still counts as a click
+# Alpha 1 is invisible but keeps the overlay hit-testable (see paintEvent).
+_HIT_TEST_FILL = QColor(0, 0, 0, 1)
+_HOVER_TINT = QColor(0, 0, 0, 34)
 
 
 def aspect_index(key: str) -> int:
@@ -162,13 +165,20 @@ class _ScreenOverlay(QWidget):
             ):
                 if part.width() > 0 and part.height() > 0:
                     painter.fillRect(part, dim)
-            if self._frozen is None:
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-                painter.fillRect(local, Qt.GlobalColor.transparent)
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            # Never leave a pixel fully transparent: Windows passes clicks on
+            # alpha-0 pixels of a layered window to the window underneath, so
+            # a cleared hover area over a maximized window swallowed every
+            # click and the selection was cancelled (1.2.0 regression).
+            # A frozen background is opaque already, so only the live overlay needs this.
+            if selected is not None:
+                if self._frozen is None:
+                    painter.fillRect(local, _HIT_TEST_FILL)
+            else:
+                # Hovered window: lighter tint than the rest, still clearly in capture mode.
+                painter.fillRect(local, _HOVER_TINT)
 
             pen = QPen(owner._border_color)
-            pen.setWidth(2)
+            pen.setWidth(2 if selected is not None else 3)
             if selected is not None:
                 pen.setStyle(Qt.PenStyle.DashLine)
                 pen.setDashOffset(float(owner._dash_offset))

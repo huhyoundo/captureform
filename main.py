@@ -5,6 +5,7 @@ import os
 import subprocess
 import shutil
 import sys
+import time
 from pathlib import Path
 
 logging.basicConfig(
@@ -49,7 +50,7 @@ from ui.tray_menu import TrayMenuController
 from ads.ad_manager import AdManager
 from ads.ad_popup import AdPopupWindow
 from utils.auto_updater import AutoUpdater, CURRENT_VERSION
-from utils.update_dialog import UpdateDialog
+from utils.update_dialog import AutoUpdateWindow, UpdateDialog
 from utils.file_manager import FileManager
 from utils.hotkey_manager import HotkeyManager
 from utils.settings import SettingsManager
@@ -161,9 +162,13 @@ class CallcapController(QObject):
             f"앱이 백그라운드에서 실행 중입니다.\n{self._display_hotkey(self.region_hotkey)} 를 눌러 화면 캡처를 시작하세요.",
         )
 
-        # Delayed startup tasks: ad popup (3s) and update check (5s)
+        self._update_window: AutoUpdateWindow | None = None
+        self._announce_if_updated()
+
+        # Delayed startup tasks: update check first (installs itself if a new
+        # version exists), then the ad popup.
+        QTimer.singleShot(1500, self._updater.check_for_updates)
         QTimer.singleShot(3000, self._show_startup_ad)
-        QTimer.singleShot(5000, self._updater.check_for_updates)
 
     @staticmethod
     def _display_hotkey(raw: str) -> str:
@@ -1035,8 +1040,39 @@ class CallcapController(QObject):
     # Auto-update
     # ------------------------------------------------------------------
 
+    _UPDATE_RETRY_SEC = 10 * 60
+
+    def _announce_if_updated(self) -> None:
+        last = str(self.settings.get("general", "last_run_version", default="") or "")
+        if last and last != CURRENT_VERSION:
+            self.tray.show_message(
+                "Callcap",
+                f"{CURRENT_VERSION} 버전으로 업데이트되었습니다.",
+                duration_ms=5000,
+            )
+        if last != CURRENT_VERSION:
+            self.settings.set(CURRENT_VERSION, "general", "last_run_version")
+
     @pyqtSlot(str, str, str)
     def _on_update_available(self, version: str, download_url: str, notes: str) -> None:
+        if not bool(self.settings.get("general", "auto_update", default=True)):
+            self._show_update_dialog(version, download_url, notes)
+            return
+        attempt = self.settings.get("general", "update_attempt", default=None) or {}
+        recent = (
+            isinstance(attempt, dict)
+            and attempt.get("version") == version
+            and time.time() - float(attempt.get("at", 0)) < self._UPDATE_RETRY_SEC
+        )
+        if recent:
+            # The same version was just tried and we are still old: the silent
+            # install failed. Ask instead of looping update -> restart -> update.
+            logging.getLogger(__name__).warning("Auto-update to %s already tried; asking instead", version)
+            self._show_update_dialog(version, download_url, notes)
+            return
+        self._start_auto_update(version, download_url)
+
+    def _show_update_dialog(self, version: str, download_url: str, notes: str) -> None:
         dialog = UpdateDialog(
             current_version=CURRENT_VERSION,
             new_version=version,
@@ -1045,6 +1081,52 @@ class CallcapController(QObject):
             updater=self._updater,
         )
         dialog.exec()
+
+    def _start_auto_update(self, version: str, download_url: str) -> None:
+        # Never cut into a capture, recording or scroll capture in progress.
+        if self._busy_message() or self.selector is not None or self._countdown is not None:
+            QTimer.singleShot(5000, lambda: self._start_auto_update(version, download_url))
+            return
+        if self._update_window is not None:
+            return
+        self.settings.set({"version": version, "at": time.time()}, "general", "update_attempt")
+        window = AutoUpdateWindow(version)
+        screen = QApplication.primaryScreen().availableGeometry()
+        window.move(screen.center().x() - window.width() // 2, screen.center().y() - window.height() // 2)
+        window.show()
+        self._update_window = window
+        self._updater.download_progress.connect(window.set_progress)
+        self._updater.download_complete.connect(self._on_auto_update_downloaded)
+        self._updater.download_failed.connect(self._on_auto_update_failed)
+        self._updater.start_download(download_url)
+
+    @pyqtSlot(str)
+    def _on_auto_update_downloaded(self, installer_path: str) -> None:
+        if self._update_window is not None:
+            self._update_window.set_installing()
+        # Let the window repaint, then hand over to the installer and quit.
+        QTimer.singleShot(800, lambda: self._install_and_quit(installer_path))
+
+    def _install_and_quit(self, installer_path: str) -> None:
+        self.hotkeys.unregister_all()
+        self.tray.tray.hide()  # no ghost tray icon while the installer runs
+        AutoUpdater.install_update(installer_path, very_silent=True)
+
+    @pyqtSlot(str)
+    def _on_auto_update_failed(self, message: str) -> None:
+        logging.getLogger(__name__).warning("Auto-update download failed: %s", message)
+        if self._update_window is not None:
+            self._update_window.close()
+            self._update_window = None
+        for signal, slot in (
+            (self._updater.download_complete, self._on_auto_update_downloaded),
+            (self._updater.download_failed, self._on_auto_update_failed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+        self.tray.show_message("Callcap", "업데이트를 받지 못했습니다. 다음 실행 때 다시 시도합니다.")
 
     @pyqtSlot()
     def shutdown(self) -> None:

@@ -262,3 +262,48 @@ class UpdateDialog(QDialog):
         log.debug("User deferred the update.")
         self._disconnect_updater()
         super().reject()
+
+
+class AutoUpdateWindow(QWidget):
+    """Small "updating" window shown while a new version installs itself.
+
+    No buttons: the update runs on its own at startup, then the installer
+    restarts Callcap.
+    """
+
+    def __init__(self, new_version: str) -> None:
+        super().__init__()
+        self.setWindowTitle("Callcap 업데이트")
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.CustomizeWindowHint
+        )
+        self.setFixedSize(380, 130)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        self._title = QLabel(f"새 버전 {new_version}로 업데이트하는 중입니다")
+        self._title.setObjectName("dialogTitle")
+        self._status = QLabel("설치 파일을 받는 중...")
+        self._status.setObjectName("dialogInfo")
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(True)
+        self._bar.setFormat("%p%")
+        layout.addWidget(self._title)
+        layout.addWidget(self._bar)
+        layout.addWidget(self._status)
+
+    @pyqtSlot(int)
+    def set_progress(self, percent: int) -> None:
+        self._bar.setValue(max(0, min(100, int(percent))))
+
+    def set_installing(self) -> None:
+        self._bar.setValue(100)
+        self._status.setText("설치 중입니다. 잠시 뒤 Callcap이 다시 켜집니다.")
+
+    def set_status(self, text: str) -> None:
+        self._status.setText(text)
