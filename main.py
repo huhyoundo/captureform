@@ -34,7 +34,9 @@ from PyQt6.QtWidgets import (
 from capture.region_recorder import RegionRecordingSession
 from capture.region_selector import CaptureActionToolbar, RegionSelector
 from capture.repeat_capture import RepeatCapture, RepeatDiffResult
+from capture import window_finder
 from capture.screen_capture import ScreenCaptureService
+from capture.scroll_capture import ScrollCaptureSession
 from clipboard.clipboard_manager import ClipboardManager
 from clipboard.file_drop_popup import get_file_from_clipboard, open_file_in_explorer
 from clipboard.pin_window import PinWindow
@@ -42,6 +44,7 @@ from ocr.ocr_dialog import OCRResultDialog
 from ocr.ocr_engine import OCREngine
 from ui.diff_dialog import RepeatDiffDialog
 from ui.history_panel import ClipboardHistoryWindow
+from ui.countdown import CountdownBubble, exclude_from_capture
 from ui.tray_menu import TrayMenuController
 from ads.ad_manager import AdManager
 from ads.ad_popup import AdPopupWindow
@@ -99,6 +102,9 @@ class CallcapController(QObject):
             file_drop = "ctrl+shift+q"
             self.settings.set(file_drop, "hotkeys", "file_drop")
         self.file_drop_hotkey = file_drop
+        self.delayed_hotkey = str(
+            self.settings.get("hotkeys", "delayed_capture", default="ctrl+alt+shift+c")
+        )
 
         startup_enabled = is_startup_enabled()
         if bool(self.settings.get("general", "start_with_windows", default=False)) != startup_enabled:
@@ -110,6 +116,8 @@ class CallcapController(QObject):
             repeat_hotkey=self.repeat_hotkey,
             clipboard_hotkey=self.clipboard_hotkey,
             startup_enabled=startup_enabled,
+            delayed_hotkey=self.delayed_hotkey,
+            delay_seconds=self._delay_seconds(),
         )
         self.hotkeys = HotkeyManager()
 
@@ -123,6 +131,11 @@ class CallcapController(QObject):
         self.current_region = None
         self.current_saved_path: Path | None = None
         self._recording_still_path: Path | None = None
+        # Paths of a capture bundle (Shift held while selecting adds to it).
+        self._bundle_paths: list[Path] = []
+        self._countdown: CountdownBubble | None = None
+        self._pending_frozen = None
+        self._scroll_session: ScrollCaptureSession | None = None
         self.editor_windows: list[object] = []
         self.pin_windows: list[PinWindow] = []
 
@@ -162,6 +175,7 @@ class CallcapController(QObject):
         self.request_repeat_capture.connect(self.start_repeat_capture)
         self.tray.region_capture_requested.connect(self.start_region_capture)
         self.tray.repeat_capture_requested.connect(self.start_repeat_capture)
+        self.tray.delayed_capture_requested.connect(self.start_delayed_capture)
         self.tray.open_save_folder_requested.connect(self.open_save_folder)
         self.tray.clipboard_history_requested.connect(self.toggle_clipboard_history)
         self.tray.startup_toggled.connect(self._on_startup_toggled)
@@ -228,6 +242,12 @@ class CallcapController(QObject):
                 "trigger_on_release": False,
                 "debounce_ms": 200,
             },
+            "delayed_capture": {
+                "combo": self.delayed_hotkey,
+                "suppress": False,
+                "trigger_on_release": False,
+                "debounce_ms": debounce_ms,
+            },
         }
 
         try:
@@ -260,36 +280,101 @@ class CallcapController(QObject):
         if action == "file_drop":
             self._show_file_drop_popup()
             return
+        if action == "delayed_capture":
+            self.start_delayed_capture()
+            return
 
     @pyqtSlot()
     def start_region_capture(self) -> None:
-        if self._is_recording():
-            self.tray.show_message("Callcap", "Recording is in progress. Click Stop first.")
+        busy = self._busy_message()
+        if busy:
+            self.tray.show_message("Callcap", busy)
             return
-        if self._is_saving_mp4():
-            self.tray.show_message("Callcap", "MP4 is being saved. Please wait.")
-            return
-        if self.selector is not None:
+        if self.selector is not None or self._countdown is not None:
             return
 
         self._cleanup_recorder()
         self._reset_toolbar()
+        self._open_selector()
 
+    def _busy_message(self) -> str | None:
+        if self._is_recording():
+            return "녹화 중입니다. 먼저 Stop을 누르세요."
+        if self._is_saving_mp4():
+            return "MP4 저장 중입니다. 잠시 기다려 주세요."
+        if self._is_scrolling():
+            return "스크롤 캡처 중입니다. 먼저 Stop을 누르세요."
+        return None
+
+    def _open_selector(self, frozen=None, windows=None) -> None:
         border_color = str(self.settings.get("capture", "region_border_color", default="#00AAFF"))
-        self.selector = RegionSelector(border_color=border_color)
+        self._pending_frozen = frozen
+        self.selector = RegionSelector(
+            border_color=border_color,
+            frozen=frozen,
+            windows=windows,
+            snap_windows=bool(self.settings.get("capture", "smart_edge_snap", default=True)),
+            aspect_mode=str(self.settings.get("capture", "aspect_mode", default="free")),
+        )
         self.selector.region_selected.connect(self._on_region_selected)
         self.selector.cancelled.connect(self._on_region_cancelled)
+        self.selector.aspect_changed.connect(self._save_aspect_mode)
         self.selector.start()
+
+    @pyqtSlot(str)
+    def _save_aspect_mode(self, mode: str) -> None:
+        self.settings.set(mode, "capture", "aspect_mode")
+
+    def _delay_seconds(self) -> int:
+        try:
+            return max(1, min(10, int(self.settings.get("capture", "delay_seconds", default=3))))
+        except (TypeError, ValueError):
+            return 3
+
+    @pyqtSlot()
+    def start_delayed_capture(self) -> None:
+        """Count down, freeze every screen, then select on the frozen picture.
+
+        The freeze is what keeps hover menus and tooltips: they close as soon
+        as the selection overlay takes focus, but they are already in the
+        snapshot by then.
+        """
+        busy = self._busy_message()
+        if busy:
+            self.tray.show_message("Callcap", busy)
+            return
+        if self.selector is not None or self._countdown is not None:
+            return
+        self._cleanup_recorder()
+        self._reset_toolbar()
+        self._countdown = CountdownBubble(self._delay_seconds())
+        self._countdown.finished.connect(self._on_countdown_finished)
+        self._countdown.start()
+
+    @pyqtSlot()
+    def _on_countdown_finished(self) -> None:
+        # Let the bubble disappear from the screen before freezing it.
+        QTimer.singleShot(150, self._freeze_and_select)
+
+    def _freeze_and_select(self) -> None:
+        self._countdown = None
+        if self.selector is not None:
+            return
+        try:
+            frozen = self.capture_service.grab_screens()
+            windows = window_finder.snapshot_windows()
+        except Exception as exc:
+            self._warn("Capture failed", f"화면을 고정하지 못했습니다.\n{exc}")
+            return
+        self._open_selector(frozen=frozen, windows=windows)
 
     @pyqtSlot()
     def start_repeat_capture(self) -> None:
-        if self._is_recording():
-            self.tray.show_message("Callcap", "Recording is in progress. Click Stop first.")
+        busy = self._busy_message()
+        if busy:
+            self.tray.show_message("Callcap", busy)
             return
-        if self._is_saving_mp4():
-            self.tray.show_message("Callcap", "MP4 is being saved. Please wait.")
-            return
-        if self.selector is not None:
+        if self.selector is not None or self._countdown is not None:
             return
         self._cleanup_recorder()
         self._reset_toolbar()
@@ -303,15 +388,25 @@ class CallcapController(QObject):
     @pyqtSlot()
     def _on_region_cancelled(self) -> None:
         self.selector = None
+        self._pending_frozen = None
 
     @pyqtSlot(QRect)
     def _on_region_selected(self, rect: QRect) -> None:
+        append = bool(self.selector is not None and self.selector.append_requested)
+        frozen = self._pending_frozen
+        self._pending_frozen = None
         self.selector = None
-        QTimer.singleShot(150, lambda: self._capture_and_show_toolbar(rect, source="region"))
+        QTimer.singleShot(
+            150,
+            lambda: self._capture_and_show_toolbar(rect, source="region", frozen=frozen, append=append),
+        )
 
-    def _capture_and_show_toolbar(self, rect, source: str = "region") -> None:
+    def _capture_and_show_toolbar(self, rect, source: str = "region", frozen=None, append: bool = False) -> None:
         try:
-            image = self.capture_service.capture_region(rect)
+            if frozen:
+                image = self.capture_service.crop_frozen(frozen, rect)
+            else:
+                image = self.capture_service.capture_region(rect)
         except Exception as exc:
             self._warn("Capture failed", f"Could not capture selected region.\n{exc}")
             return
@@ -327,6 +422,7 @@ class CallcapController(QObject):
         # Save first so we have the file path for clipboard
         self.current_saved_path = self.file_manager.save_capture(image)
         self.repeat_capture.set_last_capture(rect, image)
+        self._update_bundle(self.current_saved_path, append)
 
         # Ad after every Nth capture
         self._capture_count += 1
@@ -338,11 +434,18 @@ class CallcapController(QObject):
             self.settings.get("capture", "copy_path_with_image", default=True)
         )
         if copy_path_enabled and self.current_saved_path is not None:
-            self.clipboard.copy_image_with_path(image, self.current_saved_path)
+            self.clipboard.copy_image_with_paths(image, self._bundle_paths or [self.current_saved_path])
         else:
             self.clipboard.copy_image(image)
 
-        if source == "repeat":
+        if copy_path_enabled and len(self._bundle_paths) > 1:
+            count = len(self._bundle_paths)
+            self.tray.show_message(
+                "Callcap",
+                f"묶음 {count}장 복사됨. 붙여넣으면 {count}장이 한 번에 들어갑니다.\n"
+                "Shift 없이 캡처하면 새 묶음이 시작됩니다.",
+            )
+        elif source == "repeat":
             changed_ratio = 0.0 if diff_result is None else diff_result.changed_ratio * 100.0
             self.tray.show_message(
                 "Callcap",
@@ -366,12 +469,112 @@ class CallcapController(QObject):
         self.toolbar.set_recording(False)
         self.toolbar.set_record_busy(False)
         self.toolbar.show_near(rect)
+        exclude_from_capture(self.toolbar)
 
         if source == "repeat" and diff_result is not None:
             self._show_repeat_diff(diff_result)
 
+    _MAX_BUNDLE = 10
+
+    def _update_bundle(self, path: Path | None, append: bool) -> None:
+        if path is None:
+            return
+        alive = [p for p in self._bundle_paths if p.exists()]
+        if append and alive:
+            self._bundle_paths = (alive + [path])[-self._MAX_BUNDLE:]
+        else:
+            self._bundle_paths = [path]
+
+    def _copy_current(self) -> None:
+        if self.current_image is None:
+            return
+        paths = [p for p in self._bundle_paths if p.exists()]
+        if not paths and self.current_saved_path is not None:
+            paths = [self.current_saved_path]
+        if paths:
+            self.clipboard.copy_image_with_paths(self.current_image, paths)
+        else:
+            self.clipboard.copy_image(self.current_image)
+
+    # -- scroll capture ------------------------------------------------
+    def _is_scrolling(self) -> bool:
+        return self._scroll_session is not None and self._scroll_session.is_running
+
+    def start_scroll_capture(self) -> None:
+        if self.current_region is None or self._is_recording() or self._is_scrolling():
+            return
+        try:
+            notches = int(self.settings.get("capture", "scroll_notches", default=3))
+        except (TypeError, ValueError):
+            notches = 3
+        session = ScrollCaptureSession(self.capture_service, QRect(self.current_region), notches=notches)
+        session.finished.connect(self._on_scroll_finished)
+        session.failed.connect(self._on_scroll_failed)
+        session.progress.connect(self._on_scroll_progress)
+        self._scroll_session = session
+        if self.toolbar is not None:
+            self.toolbar.set_scrolling(True)
+        self.tray.show_message("Callcap", "스크롤 캡처 중입니다. 마우스를 움직이지 마세요. 멈추려면 Stop.")
+        session.start()
+
+    @pyqtSlot(int, int)
+    def _on_scroll_progress(self, frames: int, height: int) -> None:
+        if self.toolbar is not None:
+            button = self.toolbar._buttons.get("scroll")
+            if button is not None:
+                button.setText(f"Stop ({frames})")
+
+    @pyqtSlot(QImage, str)
+    def _on_scroll_finished(self, image: QImage, reason: str) -> None:
+        self._scroll_session = None
+        if self.toolbar is not None:
+            self.toolbar.set_scrolling(False)
+        if self.current_image is not None and image.height() <= self.current_image.height():
+            self.tray.show_message(
+                "Callcap",
+                "화면이 스크롤되지 않았습니다. 스크롤되는 창 안쪽을 선택했는지 확인하세요.",
+            )
+            return
+
+        old = self.current_saved_path
+        new_path = self.file_manager.save_capture(image)
+        # The tall image replaces the first screenful instead of adding a copy.
+        if old is not None and old != new_path and old.suffix.lower() in {".png", ".jpg", ".webp", ".bmp"}:
+            self._delete_quietly(old)
+        self._bundle_paths = [new_path if p == old else p for p in self._bundle_paths] or [new_path]
+        self.current_image = image
+        self.current_saved_path = new_path
+        self._copy_current()
+
+        notes = {
+            "end": "끝까지 이어 붙였습니다.",
+            "stopped": "중지한 곳까지 저장했습니다.",
+            "limit": "최대 길이에 도달해 여기까지 저장했습니다.",
+            "lost": "이어 붙일 위치를 찾지 못해 여기까지 저장했습니다.",
+        }
+        self.tray.show_message(
+            "Callcap",
+            f"스크롤 캡처 {image.width()}x{image.height()}: {notes.get(reason, reason)}\n경로가 복사되었습니다.",
+            on_click=lambda p=new_path: self._reveal_file_in_explorer(p),
+            duration_ms=6000,
+        )
+
+    @pyqtSlot(str)
+    def _on_scroll_failed(self, error: str) -> None:
+        self._scroll_session = None
+        if self.toolbar is not None:
+            self.toolbar.set_scrolling(False)
+        self._warn("Scroll capture", f"스크롤 캡처에 실패했습니다.\n{error}")
+
     @pyqtSlot(str)
     def _handle_toolbar_action(self, action: str) -> None:
+        if action == "scroll":
+            if self._is_scrolling():
+                self._scroll_session.stop()
+            else:
+                self.start_scroll_capture()
+            return
+
         if action == "record":
             if self._is_recording():
                 self.stop_recording()
@@ -385,15 +588,8 @@ class CallcapController(QObject):
 
         if action == "copy":
             if self.current_image is not None:
-                copy_path_enabled = bool(
-                    self.settings.get("capture", "copy_path_with_image", default=True)
-                )
-                if copy_path_enabled and self.current_saved_path is not None:
-                    self.clipboard.copy_image_with_path(self.current_image, self.current_saved_path)
-                    self.tray.show_message("Callcap", "Image + path copied to clipboard.")
-                else:
-                    self.clipboard.copy_image(self.current_image)
-                    self.tray.show_message("Callcap", "Image copied to clipboard.")
+                self._copy_current()
+                self.tray.show_message("Callcap", "이미지와 경로가 복사되었습니다.")
             return
 
         if action == "pin":
@@ -417,6 +613,9 @@ class CallcapController(QObject):
             return
 
         if action == "cancel":
+            if self._is_scrolling():
+                self._scroll_session.stop()
+                return
             if self._is_recording():
                 self.stop_recording()
                 return
@@ -468,6 +667,8 @@ class CallcapController(QObject):
             rect=QRect(self.current_region),
             output_path=output_path,
             fps=fps,
+            show_clicks=bool(self.settings.get("capture", "record_show_clicks", default=True)),
+            show_keys=bool(self.settings.get("capture", "record_show_keys", default=True)),
         )
         recorder.finished.connect(self._on_recording_finished)
         recorder.failed.connect(self._on_recording_failed)
@@ -605,6 +806,7 @@ class CallcapController(QObject):
         # region was picked, then hand the GIF to the clipboard.
         self._delete_quietly(self._recording_still_path)
         self._recording_still_path = None
+        self._bundle_paths = [path]
         self.current_saved_path = path
         self.clipboard.copy_file_path(path)
 
@@ -662,6 +864,7 @@ class CallcapController(QObject):
         if previous is not None and previous != path and previous.suffix.lower() == ".gif":
             self._delete_quietly(previous)
         self.current_saved_path = path
+        self._bundle_paths = [path]
         self.clipboard.copy_file_path(path)
 
         if self.toolbar is not None:
@@ -849,6 +1052,11 @@ class CallcapController(QObject):
             self.tray.show_message("Callcap", "MP4 is being saved. Quit after it finishes.")
             return
         self.hotkeys.unregister_all()
+        if self._countdown is not None:
+            self._countdown.cancel()
+            self._countdown = None
+        if self._is_scrolling():
+            self._scroll_session.stop()
         if self._is_recording():
             self.region_recorder.stop()
         self._cleanup_recorder()

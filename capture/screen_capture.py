@@ -135,6 +135,54 @@ class ScreenCaptureService:
 
         return result if drawn else None
 
+    # -- frozen screens (delayed capture) ----------------------------------
+    def grab_screens(self) -> list[tuple[QRect, float, QImage]]:
+        """Snapshot every screen now: (logical geometry, dpr, physical image).
+
+        Used by delayed capture so menus and tooltips that close when the
+        selection overlay takes focus are still in the picture.
+        """
+        frozen: list[tuple[QRect, float, QImage]] = []
+        for screen in QGuiApplication.screens():
+            pixmap = screen.grabWindow(0)
+            if pixmap.isNull():
+                continue
+            image = pixmap.toImage()
+            image.setDevicePixelRatio(1.0)
+            frozen.append((QRect(screen.geometry()), float(screen.devicePixelRatio()) or 1.0, image))
+        return frozen
+
+    @staticmethod
+    def crop_frozen(frozen: list[tuple[QRect, float, QImage]], rect: QRect) -> QImage:
+        capture_rect = rect.normalized()
+        result = QImage(capture_rect.size(), QImage.Format.Format_ARGB32)
+        result.fill(0)
+        painter = QPainter(result)
+        drawn = False
+        try:
+            for geometry, dpr, image in frozen:
+                inter = capture_rect.intersected(geometry)
+                if inter.isEmpty():
+                    continue
+                sx = image.width() / max(1, geometry.width())
+                sy = image.height() / max(1, geometry.height())
+                source = QRect(
+                    int(round((inter.x() - geometry.x()) * sx)),
+                    int(round((inter.y() - geometry.y()) * sy)),
+                    max(1, int(round(inter.width() * sx))),
+                    max(1, int(round(inter.height() * sy))),
+                )
+                piece = image.copy(source)
+                if piece.size() != inter.size():
+                    piece = piece.scaled(inter.size())
+                painter.drawImage(inter.topLeft() - capture_rect.topLeft(), piece)
+                drawn = True
+        finally:
+            painter.end()
+        if not drawn:
+            raise RuntimeError("Selected area is not on any screen.")
+        return result
+
     @staticmethod
     def image_to_png_bytes(image: QImage) -> bytes:
         byte_array = QByteArray()

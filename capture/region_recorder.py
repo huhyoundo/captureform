@@ -13,6 +13,7 @@ from pathlib import Path
 from PIL import Image
 from PyQt6.QtCore import QObject, QRect, Qt, QTimer, pyqtSignal
 
+from capture.input_overlay import InputTracker, draw_overlays
 from capture.screen_capture import ScreenCaptureService
 
 
@@ -28,8 +29,13 @@ class RegionRecordingSession(QObject):
         rect: QRect,
         output_path: Path,
         fps: int = 24,
+        show_clicks: bool = True,
+        show_keys: bool = True,
     ) -> None:
         super().__init__()
+        self._show_clicks = show_clicks
+        self._show_keys = show_keys
+        self._tracker = InputTracker() if (show_clicks or show_keys) else None
         self._capture_service = capture_service
         self._rect = rect.normalized()
         self._output_path = Path(output_path)
@@ -78,6 +84,8 @@ class RegionRecordingSession(QObject):
         self._started_at = time.perf_counter()
         self._recorded_elapsed = 0.0
         self._running = True
+        if self._tracker is not None:
+            self._tracker.start()
 
         self._start_audio_capture()
         self._capture_frame()
@@ -90,9 +98,14 @@ class RegionRecordingSession(QObject):
 
         self._timer.stop()
         self._running = False
+        self._stop_tracker()
         self._stop_audio_capture()
         self._recorded_elapsed = max(0.0, time.perf_counter() - self._started_at)
         self._finalize_recording()
+
+    def _stop_tracker(self) -> None:
+        if self._tracker is not None:
+            self._tracker.stop()
 
     def _start_audio_capture(self) -> None:
         if self._tmp_dir is None:
@@ -173,6 +186,15 @@ class RegionRecordingSession(QObject):
             image = self._capture_service.capture_region(self._rect)
             if image.isNull():
                 raise RuntimeError("Failed to capture a recording frame.")
+            if self._tracker is not None:
+                image = image.convertToFormat(image.Format.Format_ARGB32)
+                draw_overlays(
+                    image,
+                    self._rect,
+                    self._tracker,
+                    show_clicks=self._show_clicks,
+                    show_keys=self._show_keys,
+                )
 
             frame_path = self._tmp_dir / f"frame_{len(self._frame_paths):06d}.png"
             if not image.save(str(frame_path), "PNG"):
@@ -181,6 +203,7 @@ class RegionRecordingSession(QObject):
         except Exception as exc:
             self._timer.stop()
             self._running = False
+            self._stop_tracker()
             self._stop_audio_capture()
             self._cleanup_tmp_dir()
             self.failed.emit(str(exc))

@@ -124,25 +124,48 @@ class ClipboardManager(QObject):
         When pasting in a terminal/prompt (text-only), the file path is pasted.
         When pasting in an image-capable app, the image is pasted.
         """
+        self.copy_image_with_paths(image, [file_path])
+
+    @staticmethod
+    def join_paths(paths: list[Path | str]) -> str:
+        """Paths separated by single spaces.
+
+        Claude Code splits a paste at a space followed by a drive letter (or
+        at a newline) and turns every image path into its own [Image #N], so
+        a bundle pastes as several images at once. Spaces are used instead
+        of newlines because Windows Terminal warns before multi-line pastes.
+        """
+        return " ".join(str(p) for p in paths)
+
+    def copy_image_with_paths(self, image: QImage, paths: list[Path | str]) -> None:
+        """Copy the latest image plus the paths of a capture bundle."""
+        paths = [str(p) for p in paths]
+        text = self.join_paths(paths)
         self._suppress_count += 1
         clipboard = QApplication.clipboard()
 
         mime = QMimeData()
         mime.setImageData(image)
-        mime.setText(str(file_path))
-        mime.setUrls([QUrl.fromLocalFile(str(file_path))])
+        mime.setText(text)
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
 
         clipboard.setMimeData(mime)
-        self._own_copy = {"kind": "image_with_path", "image": image.copy(), "path": str(file_path), "at": time.time()}
+        self._own_copy = {
+            "kind": "image_with_path",
+            "image": image.copy(),
+            "path": text,
+            "paths": paths,
+            "at": time.time(),
+        }
 
         self._last_image_hash = _image_hash(image)
-        self._last_text = str(file_path)
+        self._last_text = text
         self._add_entry(ClipboardEntry(
             entry_type="image",
             timestamp=datetime.now(),
             image=image.copy(),
             thumbnail=_make_thumbnail(image),
-            text=str(file_path),
+            text=text,
         ))
 
     def copy_file_path(self, file_path: Path | str) -> None:
@@ -158,7 +181,7 @@ class ClipboardManager(QObject):
         mime.setText(str(file_path))
         mime.setUrls([QUrl.fromLocalFile(str(file_path))])
         clipboard.setMimeData(mime)
-        self._own_copy = {"kind": "file_path", "path": str(file_path), "at": time.time()}
+        self._own_copy = {"kind": "file_path", "path": str(file_path), "paths": [str(file_path)], "at": time.time()}
 
         self._last_text = str(file_path)
         self._last_image_hash = ""
@@ -297,7 +320,7 @@ class ClipboardManager(QObject):
         if own["kind"] == "image_with_path":
             mime.setImageData(own["image"])
         mime.setText(own["path"])
-        mime.setUrls([QUrl.fromLocalFile(own["path"])])
+        mime.setUrls([QUrl.fromLocalFile(p) for p in own["paths"]])
         self._suppress_count += 1
         clipboard.setMimeData(mime)
         self._last_text = own["path"]
@@ -316,7 +339,7 @@ class ClipboardManager(QObject):
         text = mime.text() if mime.hasText() else ""
         if text == own["path"] or not is_accidental_selection(text):
             return False
-        if not Path(own["path"]).exists():
+        if not all(Path(p).exists() for p in own["paths"]):
             self._own_copy = None
             return False
         _log.info("clipboard became an accidental selection %r after a capture", text[:20])

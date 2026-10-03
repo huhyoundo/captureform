@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 class TrayMenuController(QObject):
     region_capture_requested = pyqtSignal()
     repeat_capture_requested = pyqtSignal()
+    delayed_capture_requested = pyqtSignal()
     open_save_folder_requested = pyqtSignal()
     clipboard_history_requested = pyqtSignal()
     startup_toggled = pyqtSignal(bool)
@@ -23,6 +24,8 @@ class TrayMenuController(QObject):
         repeat_hotkey: str = "ctrl+shift+r",
         clipboard_hotkey: str = "ctrl+alt+v",
         startup_enabled: bool = False,
+        delayed_hotkey: str = "ctrl+alt+shift+c",
+        delay_seconds: int = 3,
     ) -> None:
         super().__init__()
         self._message_click_handler: Callable[[], None] | None = None
@@ -45,6 +48,12 @@ class TrayMenuController(QObject):
         repeat_action = QAction(f"Repeat Last\t{repeat_label}", self)
         repeat_action.triggered.connect(self.repeat_capture_requested.emit)
         menu.addAction(repeat_action)
+
+        delayed_action = QAction(
+            f"{delay_seconds}초 후 캡처 (메뉴·툴팁용)\t{self._display_hotkey(delayed_hotkey)}", self
+        )
+        delayed_action.triggered.connect(self.delayed_capture_requested.emit)
+        menu.addAction(delayed_action)
 
         menu.addSeparator()
 
