@@ -23,7 +23,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 # ---------------------------------------------------------------------------
 # Public constant – bump this on every release build.
 # ---------------------------------------------------------------------------
-CURRENT_VERSION = "1.2.2"
+CURRENT_VERSION = "1.2.3"
 
 # GitHub repository to query.  Change owner/repo before shipping.
 _GITHUB_OWNER = "huhyoundo"
@@ -295,8 +295,15 @@ class AutoUpdater(QObject):
         if not download_url:
             log.warning("start_download called with empty URL.")
             return
-        if self._thread is not None and self._thread.isRunning():
-            log.debug("Download already in progress; ignoring duplicate request.")
+        if self._thread is not None:
+            # update_available arrives while the check thread is still
+            # winding down. Dropping the request here left the automatic
+            # update stuck at 0%, so queue it and start when that thread ends.
+            if self._worker is not None and self._worker._download_url:
+                log.debug("Download already in progress; ignoring duplicate request.")
+                return
+            log.debug("Check thread still finishing; download queued.")
+            self._pending_download_url = download_url
             return
 
         log.debug("Spawning download thread for %s", download_url)
@@ -382,3 +389,7 @@ class AutoUpdater(QObject):
         if self._worker is not None:
             self._worker.deleteLater()
             self._worker = None
+        if self._pending_download_url:
+            url, self._pending_download_url = self._pending_download_url, ""
+            log.debug("Starting queued download for %s", url)
+            self._start_worker(download_url=url, slot="run_download")

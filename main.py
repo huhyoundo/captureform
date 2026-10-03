@@ -1096,12 +1096,33 @@ class CallcapController(QObject):
         window.show()
         self._update_window = window
         self._updater.download_progress.connect(window.set_progress)
+        self._updater.download_progress.connect(self._note_update_progress)
         self._updater.download_complete.connect(self._on_auto_update_downloaded)
         self._updater.download_failed.connect(self._on_auto_update_failed)
+        self._update_progress_at = time.monotonic()
+        # Watchdog: a stalled download must never leave the window up forever.
+        self._update_watchdog = QTimer(self)
+        self._update_watchdog.timeout.connect(self._check_update_stall)
+        self._update_watchdog.start(10000)
         self._updater.start_download(download_url)
+
+    _UPDATE_STALL_SEC = 60
+
+    @pyqtSlot(int)
+    def _note_update_progress(self, _percent: int) -> None:
+        self._update_progress_at = time.monotonic()
+
+    def _check_update_stall(self) -> None:
+        if self._update_window is None:
+            self._update_watchdog.stop()
+            return
+        if time.monotonic() - self._update_progress_at > self._UPDATE_STALL_SEC:
+            self._update_watchdog.stop()
+            self._on_auto_update_failed("download stalled")
 
     @pyqtSlot(str)
     def _on_auto_update_downloaded(self, installer_path: str) -> None:
+        self._update_watchdog.stop()
         if self._update_window is not None:
             self._update_window.set_installing()
         # Let the window repaint, then hand over to the installer and quit.
